@@ -1,0 +1,423 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>DIGI DEFENSE — Camp Media Lab</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Bebas+Neue&family=Barlow+Condensed:wght@400;500;600;700&family=JetBrains+Mono:wght@400;700&display=swap" rel="stylesheet">
+<style>
+  * { margin:0; padding:0; box-sizing:border-box; }
+  :root {
+    --display: 'Bebas Neue', 'Oswald', 'Avenir Next Condensed', 'HelveticaNeue-CondensedBold',
+               'Arial Narrow', Impact, sans-serif;
+    --ui: 'Barlow Condensed', 'Avenir Next', 'Helvetica Neue', system-ui, sans-serif;
+    --mono: 'JetBrains Mono', ui-monospace, 'SF Mono', Menlo, 'Courier New', monospace;
+    --acid: #a8ff3e;
+    --amber: #ffc53d;
+  }
+  html,body { width:100%; height:100%; overflow:hidden; background:#000; font-family:var(--mono); }
+  #c { display:block; width:100%; height:100%; }
+
+  /* full screen overlays */
+  .overlay { position:fixed; inset:0; display:flex; flex-direction:column; align-items:center;
+             justify-content:center; z-index:50; }
+  @keyframes blink { 50% { opacity:0.3; } }
+  @keyframes riseIn { from { opacity:0; transform:translateY(14px); } to { opacity:1; transform:none; } }
+
+  /* ---------- start menu ---------- */
+  #startOverlay {
+    color:#e9f1e4; text-align:center; cursor:pointer;
+    background:
+      radial-gradient(ellipse 80% 60% at 50% 42%, rgba(70,90,55,0.30), transparent 70%),
+      linear-gradient(180deg, rgba(6,9,7,0.95) 0%, rgba(8,12,9,0.88) 45%, rgba(4,6,5,0.97) 100%);
+  }
+  #startOverlay::after {   /* subtle scanlines */
+    content:''; position:absolute; inset:0; pointer-events:none; opacity:.35;
+    background:repeating-linear-gradient(180deg, rgba(255,255,255,.035) 0 1px, transparent 1px 3px);
+  }
+  .menuCard { position:relative; z-index:2; display:flex; flex-direction:column; align-items:center;
+              animation:riseIn .5s ease both; }
+  .eyebrow { font-family:var(--ui); font-size:12px; letter-spacing:.55em; text-transform:uppercase;
+             color:#7d8f74; margin-bottom:14px; }
+  #startOverlay h1 {
+    font-family:var(--display); font-size:clamp(64px,11vw,132px); font-weight:400; line-height:.9;
+    letter-spacing:.10em; text-transform:uppercase;
+    background:linear-gradient(180deg,#f4ffe6 0%, var(--acid) 55%, #63a800 100%);
+    -webkit-background-clip:text; background-clip:text; color:transparent;
+    filter:drop-shadow(0 0 26px rgba(168,255,62,.35)) drop-shadow(0 6px 18px rgba(0,0,0,.8));
+  }
+  .rule { width:min(560px,72vw); height:1px; margin:18px 0 16px;
+          background:linear-gradient(90deg, transparent, rgba(168,255,62,.55), transparent); }
+  #startOverlay h2 { font-family:var(--ui); font-size:13px; font-weight:500; letter-spacing:.38em;
+                     text-transform:uppercase; color:#9fb096; }
+
+  .keyGrid { margin-top:34px; display:grid; grid-template-columns:repeat(2, auto); gap:12px 48px;
+             font-family:var(--ui); font-size:15px; letter-spacing:.06em; color:#c9d6c2; }
+  .keyRow { display:grid; grid-template-columns:132px 1fr; align-items:center; gap:14px; }
+  .keyRow .ks { display:flex; gap:5px; align-items:center; justify-content:flex-end; }
+  .keyRow span.lbl { color:#8e9c87; text-transform:uppercase; font-size:13px; letter-spacing:.14em;
+                     text-align:left; }
+  .keyRow .dash { color:#5f6b59; font-size:12px; }
+  kbd { font-family:var(--mono); font-size:12px; font-weight:700; color:#eafce0;
+        background:linear-gradient(180deg,#2c332a,#1b201a); border:1px solid #4a5544;
+        border-bottom-width:2px; border-radius:5px; padding:3px 8px; min-width:26px; display:inline-block;
+        text-align:center; box-shadow:0 1px 0 rgba(255,255,255,.06) inset; }
+
+  #startOverlay .go {
+    margin-top:40px; font-family:var(--display); font-size:26px; letter-spacing:.28em;
+    color:#0d1408; background:linear-gradient(180deg,#c6ff5c,#7fd10a);
+    padding:13px 42px 10px; border-radius:3px;
+    box-shadow:0 0 34px rgba(168,255,62,.4), 0 6px 20px rgba(0,0,0,.6);
+    animation:blink 1.6s infinite;
+  }
+  #startOverlay .credits { position:absolute; bottom:16px; z-index:2; font-family:var(--ui);
+                           font-size:10.5px; letter-spacing:.1em; color:#5f6b59; padding:0 24px; }
+
+  /* ---------- game over ---------- */
+  #gameoverOverlay {
+    text-align:center; display:none; cursor:pointer;
+    background:
+      radial-gradient(ellipse 70% 55% at 50% 45%, rgba(120,20,14,0.42), transparent 70%),
+      linear-gradient(180deg, rgba(14,4,4,0.95), rgba(6,2,2,0.97));
+  }
+  #gameoverOverlay h1 { font-family:var(--display); font-size:clamp(52px,9vw,104px); font-weight:400;
+    letter-spacing:.09em; text-transform:uppercase;
+    background:linear-gradient(180deg,#ffd9d4,#ff5544 60%,#a11d12);
+    -webkit-background-clip:text; background-clip:text; color:transparent;
+    filter:drop-shadow(0 0 26px rgba(255,70,50,.35)); }
+  #gameoverOverlay p { margin-top:18px; font-family:var(--ui); font-size:16px; letter-spacing:.14em;
+                       color:#e8d6cf; line-height:1.7; }
+  #gameoverOverlay .go { margin-top:34px; font-family:var(--display); font-size:22px; letter-spacing:.28em;
+                         color:var(--amber); animation:blink 1.4s infinite; }
+
+  /* flash + damage fx */
+  #flashFx { position:fixed; inset:0; background:#fff; opacity:0; pointer-events:none; z-index:40; }
+  #dmgFx { position:fixed; inset:0; pointer-events:none; z-index:39; opacity:0;
+           background:radial-gradient(ellipse at center, rgba(255,0,0,0) 40%, rgba(200,0,0,0.55) 100%); }
+
+  /* critical health — pulsing red edges */
+  #critFx { position:fixed; inset:0; pointer-events:none; z-index:38; opacity:0;
+            background:radial-gradient(ellipse 76% 66% at 50% 50%, rgba(255,0,0,0) 45%, rgba(190,0,0,.85) 100%); }
+  #critFx.on { animation:critPulse 1.05s ease-in-out infinite; }
+  @keyframes critPulse { 0%,100% { opacity:.42; } 50% { opacity:.88; } }
+  #hpBar.crit { animation:hpFlash .7s ease-in-out infinite; }
+  @keyframes hpFlash { 0%,100% { filter:brightness(1); } 50% { filter:brightness(2.1) saturate(1.5); } }
+  .barLabel.crit { color:#ff5a4a; animation:hpFlash .7s ease-in-out infinite; }
+
+  /* bear mauling — claw slashes across the screen */
+  #clawFx { position:fixed; inset:0; pointer-events:none; z-index:41; opacity:0; overflow:hidden; }
+  #clawFx.hit { animation:clawFlash .62s ease-out forwards; }
+  @keyframes clawFlash { 0% { opacity:1; } 70% { opacity:1; } 100% { opacity:0; } }
+  #clawFx i { position:absolute; top:-30%; height:170%; width:min(9vw,90px);
+              background:linear-gradient(90deg, rgba(255,255,255,0) 0%, rgba(255,240,235,.95) 35%,
+                                          rgba(210,20,25,.95) 55%, rgba(120,0,0,0) 100%);
+              filter:blur(1.5px); transform-origin:top center; }
+  #clawFx i:nth-child(1) { left:6%;  transform:rotate(19deg) scaleY(0); animation:claw .34s .00s ease-out forwards; }
+  #clawFx i:nth-child(2) { left:30%; transform:rotate(15deg) scaleY(0); animation:claw .34s .05s ease-out forwards; }
+  #clawFx i:nth-child(3) { left:56%; transform:rotate(21deg) scaleY(0); animation:claw .34s .10s ease-out forwards; }
+  #clawFx i:nth-child(4) { left:78%; transform:rotate(16deg) scaleY(0); animation:claw .34s .15s ease-out forwards; }
+  @keyframes claw { from { transform:rotate(var(--r,18deg)) scaleY(0); }
+                    to   { transform:rotate(var(--r,18deg)) scaleY(1); } }
+  #clawFx.hit i:nth-child(1) { --r:19deg; }
+  #clawFx.hit i:nth-child(2) { --r:15deg; }
+  #clawFx.hit i:nth-child(3) { --r:21deg; }
+  #clawFx.hit i:nth-child(4) { --r:16deg; }
+  #clawFx b { position:absolute; inset:0; display:block;
+              background:radial-gradient(ellipse at 50% 50%, rgba(180,0,0,.0) 30%, rgba(150,0,0,.75) 100%); }
+
+  /* viewfinder HUD */
+  #hud { position:fixed; inset:0; pointer-events:none; z-index:30; display:none; color:#eaffea; }
+  .vfCorner { position:absolute; width:56px; height:56px; border:3px solid rgba(230,255,230,0.8); }
+  #vfTL { top:6%; left:6%; border-right:none; border-bottom:none; }
+  #vfTR { top:6%; right:6%; border-left:none; border-bottom:none; }
+  #vfBL { bottom:8%; left:6%; border-right:none; border-top:none; }
+  #vfBR { bottom:8%; right:6%; border-left:none; border-top:none; }
+  #crosshair { position:absolute; top:50%; left:50%; transform:translate(-50%,-50%);
+               width:34px; height:34px; }
+  #crosshair:before, #crosshair:after { content:""; position:absolute; background:rgba(235,255,235,0.9); }
+  #crosshair:before { left:50%; top:0; width:2px; height:100%; transform:translateX(-50%); }
+  #crosshair:after { top:50%; left:0; height:2px; width:100%; transform:translateY(-50%); }
+  #crosshair.head:before, #crosshair.head:after { background:#ff4d6a; box-shadow:0 0 8px #ff4d6a; }
+  #crosshair.head { outline:1px solid rgba(255,77,106,.85); outline-offset:6px; border-radius:50%; }
+  #rec { position:absolute; top:6.5%; left:calc(6% + 70px); font-size:13px; letter-spacing:.2em; color:#ffdddd;}
+  #rec .dot { display:inline-block; width:12px; height:12px; border-radius:50%; background:#ff3b30; margin-right:6px; animation:blink 1s infinite;}
+  #roundInfo { position:absolute; top:20%; width:100%; text-align:center;
+               font-family:var(--display); font-size:clamp(52px,8vw,104px); letter-spacing:.12em;
+               line-height:1; text-transform:uppercase;
+               background:linear-gradient(180deg,#fff6d8 0%, #ffc53d 55%, #d17f00 100%);
+               -webkit-background-clip:text; background-clip:text; color:transparent;
+               filter:drop-shadow(0 0 30px rgba(255,197,61,.55)) drop-shadow(0 5px 16px rgba(0,0,0,.85)); }
+  #stats { position:absolute; bottom:8.4%; left:calc(6% + 70px); font-size:12px; letter-spacing:.1em;
+           text-shadow:0 1px 2px #000; }
+
+  /* always-on round readout, top left under the REC light */
+  #roundBadge { position:absolute; top:10.5%; left:calc(6% + 70px); text-align:center;
+                padding:7px 20px 9px; border-radius:3px; display:none; pointer-events:none;
+                background:linear-gradient(180deg, rgba(8,10,14,.78), rgba(8,10,14,.34));
+                border:1px solid rgba(255,197,61,.5);
+                box-shadow:0 0 26px rgba(255,197,61,.20), 0 4px 16px rgba(0,0,0,.7); }
+  #rbLabel { font-size:11px; letter-spacing:.44em; text-indent:.44em; color:#ffd24d;
+             text-shadow:0 2px 4px #000; }
+  #rbNum { font-family:var(--display); font-size:52px; line-height:.94; letter-spacing:.04em;
+           background:linear-gradient(180deg,#fff6d8 0%, #ffc53d 55%, #d17f00 100%);
+           -webkit-background-clip:text; background-clip:text; color:transparent;
+           filter:drop-shadow(0 0 16px rgba(255,197,61,.6)) drop-shadow(0 3px 7px rgba(0,0,0,.9));
+           transition:transform .16s; }
+  #roundBadge.bump { animation:rbBump .6s cubic-bezier(.2,1.4,.4,1); }
+  @keyframes rbBump {
+    0%   { transform:scale(1);    border-color:rgba(255,197,61,.5);  box-shadow:0 0 26px rgba(255,197,61,.20), 0 4px 16px rgba(0,0,0,.7); }
+    35%  { transform:scale(1.28); border-color:rgba(255,240,180,1);  box-shadow:0 0 46px rgba(255,197,61,.75), 0 4px 16px rgba(0,0,0,.7); }
+    100% { transform:scale(1);    border-color:rgba(255,197,61,.5);  box-shadow:0 0 26px rgba(255,197,61,.20), 0 4px 16px rgba(0,0,0,.7); }
+  }
+
+  /* big prominent score readout */
+  #scoreBox { position:absolute; top:6.5%; left:50%; transform:translateX(-50%); text-align:center;
+              pointer-events:none; }
+  #scoreLabel { font-size:12px; letter-spacing:6px; color:#9fb8a2; text-shadow:0 2px 4px #000; }
+  #scoreVal { font-size:58px; font-weight:bold; letter-spacing:3px; color:#eaffea; line-height:1;
+              text-shadow:0 0 18px rgba(124,252,0,0.55), 0 3px 10px #000; transition:transform .12s; }
+  #scoreVal.pop { transform:scale(1.22); color:#bfff6a; }
+  #hiScore { font-size:13px; letter-spacing:3px; color:#ffd24d; margin-top:4px; text-shadow:0 2px 4px #000; }
+  #hiScore.beat { color:#7CFC00; }
+  #livesBox { margin-top:7px; font-size:19px; letter-spacing:4px; line-height:1;
+              text-shadow:0 0 12px rgba(255,82,82,.7), 0 2px 5px #000; display:none; }
+  #livesBox.pop { animation:lifePop .45s ease; }
+  @keyframes lifePop { 0%{transform:scale(1)} 40%{transform:scale(1.45)} 100%{transform:scale(1)} }
+  #bars { position:absolute; bottom:8.4%; right:calc(6% + 70px); width:190px; }
+  .barLabel { font-size:10px; letter-spacing:.22em; margin-bottom:3px; text-shadow:0 1px 2px #000;
+              color:#b6c6ad; }
+  .barOuter { width:100%; height:9px; background:rgba(0,0,0,0.55);
+              border:1px solid rgba(255,255,255,0.35); margin-bottom:9px; border-radius:2px; }
+  .barInner { height:100%; }
+  #hpBar { background:linear-gradient(90deg,#e33,#f90); width:100%; }
+  #chargeBar { background:linear-gradient(90deg,#7CFC00,#efe); width:100%; }
+  #shieldBar { background:linear-gradient(90deg,#2a8fd8,#9fe4ff); width:100%;
+               box-shadow:0 0 10px rgba(78,197,255,.7); }
+
+  /* blue rim that pulses when the shield eats a hit */
+  #shieldFx { position:fixed; inset:0; pointer-events:none; z-index:22; opacity:0;
+              box-shadow:inset 0 0 90px 20px rgba(78,197,255,.55),
+                         inset 0 0 200px 60px rgba(40,120,200,.28); }
+  #shieldFx.hit { animation:shieldPulse .42s ease-out; }
+  @keyframes shieldPulse { 0%{opacity:0} 18%{opacity:1} 100%{opacity:0} }
+  #toast { position:absolute; bottom:24%; width:100%; text-align:center; font-size:20px; color:#bff; text-shadow:0 2px 6px #000; opacity:0; transition:opacity .3s;}
+  #prompt { position:absolute; bottom:18%; width:100%; text-align:center; font-size:22px; color:#ffd24d;
+            text-shadow:0 2px 6px #000; letter-spacing:2px; display:none; animation:blink 1.2s infinite; }
+
+  #wepName { position:absolute; bottom:5.2%; right:calc(6% + 70px); font-size:12px; letter-spacing:.22em;
+             color:#eaffea; text-shadow:0 2px 4px #000; text-align:right; }
+
+
+  /* GTA-style weapon wheel */
+  #wheel { position:fixed; inset:0; z-index:60; display:none; align-items:center; justify-content:center;
+           background:rgba(6,8,12,0.42); backdrop-filter:blur(2px); }
+  #wheelSvg { width:min(58vh,440px); height:min(58vh,440px); overflow:visible; }
+  #wheelSvg .seg { fill:rgba(18,22,28,0.72); stroke:rgba(230,255,230,0.35); stroke-width:1.5;
+                   transition:fill .12s, stroke .12s; cursor:pointer; }
+  #wheelSvg .seg.on { fill:rgba(124,252,0,0.30); stroke:#bfff6a; stroke-width:3; }
+  #wheelSvg .seg.locked { fill:rgba(12,14,18,0.85); stroke:rgba(140,150,160,0.25);
+                          stroke-dasharray:5 5; cursor:not-allowed; }
+  #wheelSvg text { fill:#eaffea; font-family:'Courier New',monospace; font-size:13px; letter-spacing:1px;
+                   text-anchor:middle; dominant-baseline:middle; pointer-events:none; }
+  #wheelSvg text.num { fill:#ffd24d; font-size:16px; font-weight:bold; }
+  #wheelLabel { position:absolute; bottom:16%; width:100%; text-align:center; color:#bfff6a;
+                font-family:'Courier New',monospace; font-size:26px; letter-spacing:4px;
+                text-shadow:0 2px 10px #000; }
+
+  /* ---------- mystery box reward popup ---------- */
+  #rewardPop {
+    position:fixed; left:50%; top:38%; transform:translate(-50%,-50%) scale(.86);
+    z-index:65; display:none; opacity:0; pointer-events:none;
+    width:min(460px, 84vw);
+    background:linear-gradient(165deg, rgba(20,24,30,.97), rgba(11,14,18,.97));
+    border:1px solid var(--rc, #a8ff3e);
+    border-radius:12px; padding:26px 30px 24px;
+    box-shadow:0 0 0 1px rgba(255,255,255,.05) inset,
+               0 0 48px var(--rcGlow, rgba(168,255,62,.28)),
+               0 26px 60px rgba(0,0,0,.75);
+    text-align:center;
+  }
+  #rewardPop.show { display:block; animation:popIn .42s cubic-bezier(.2,1.3,.4,1) forwards; }
+  #rewardPop.hide { animation:popOut .3s ease forwards; }
+  @keyframes popIn  { from { opacity:0; transform:translate(-50%,-50%) scale(.86); }
+                      to   { opacity:1; transform:translate(-50%,-50%) scale(1); } }
+  @keyframes popOut { from { opacity:1; transform:translate(-50%,-50%) scale(1); }
+                      to   { opacity:0; transform:translate(-50%,-50%) scale(1.06); } }
+
+  #rewardPop .rpTag { font-family:var(--ui); font-size:11px; letter-spacing:.42em; text-transform:uppercase;
+                      color:#7d8a93; margin-bottom:14px; }
+  #rewardPop .rpIcon { font-size:52px; line-height:1; margin-bottom:12px;
+                       filter:drop-shadow(0 0 18px var(--rcGlow, rgba(168,255,62,.5))); }
+  #rewardPop .rpName { font-family:var(--display); font-size:38px; letter-spacing:.09em; line-height:1;
+                       text-transform:uppercase; color:var(--rc,#a8ff3e);
+                       text-shadow:0 0 24px var(--rcGlow, rgba(168,255,62,.35)); }
+  #rewardPop .rpDesc { font-family:var(--ui); font-size:14.5px; letter-spacing:.05em; line-height:1.55;
+                       color:#aab6bf; margin-top:12px; }
+  #rewardPop .rpBar { margin-top:18px; height:3px; border-radius:2px; overflow:hidden;
+                      background:rgba(255,255,255,.09); }
+  #rewardPop .rpBar i { display:block; height:100%; width:100%; background:var(--rc,#a8ff3e);
+                        transform-origin:left; animation:rpDrain 3.2s linear forwards; }
+  @keyframes rpDrain { from { transform:scaleX(1); } to { transform:scaleX(0); } }
+
+  /* ---------- "name that alien" quiz ---------- */
+  #alienQuiz { position:fixed; inset:0; z-index:68; display:none; flex-direction:column;
+               align-items:center; justify-content:space-between; padding:6vh 4vw 8vh;
+               background:radial-gradient(ellipse 70% 55% at 50% 50%, transparent 30%, rgba(3,6,10,.82) 100%); }
+  #alienQuiz .aqTitle {
+    font-family:var(--display); font-size:clamp(48px,9vw,120px); letter-spacing:.08em; line-height:1;
+    text-transform:uppercase; text-align:center;
+    background:linear-gradient(180deg,#eaffff 0%,#5cffd8 50%,#12a98a 100%);
+    -webkit-background-clip:text; background-clip:text; color:transparent;
+    filter:drop-shadow(0 0 28px rgba(92,255,216,.5)) drop-shadow(0 6px 20px rgba(0,0,0,.9));
+    animation:aqPulse 1.8s ease-in-out infinite;
+  }
+  @keyframes aqPulse { 50% { filter:drop-shadow(0 0 44px rgba(92,255,216,.8)) drop-shadow(0 6px 20px rgba(0,0,0,.9)); } }
+  #aqForm { display:flex; gap:12px; align-items:center; }
+  #aqInput {
+    font-family:var(--mono); font-size:22px; letter-spacing:.08em; color:#eafffb;
+    background:rgba(8,14,18,.9); border:1px solid #2ee0b8; border-radius:6px;
+    padding:14px 20px; width:min(420px,60vw); outline:none;
+    box-shadow:0 0 26px rgba(46,224,184,.28), inset 0 0 0 1px rgba(255,255,255,.04);
+  }
+  #aqInput::placeholder { color:#4d6f68; }
+  #aqBtn {
+    font-family:var(--display); font-size:22px; letter-spacing:.2em; cursor:pointer;
+    color:#04160f; background:linear-gradient(180deg,#7dffd8,#18c79c);
+    border:none; border-radius:6px; padding:15px 30px 12px;
+    box-shadow:0 0 26px rgba(46,224,184,.4);
+  }
+  #aqResult { position:absolute; top:44%; left:50%; transform:translate(-50%,-50%) scale(.7);
+              font-family:var(--display); font-size:clamp(60px,12vw,150px); letter-spacing:.1em;
+              color:#7CFC00; text-shadow:0 0 50px rgba(124,252,0,.75), 0 6px 24px #000;
+              opacity:0; pointer-events:none; }
+  #aqResult.pop { animation:aqCorrect .55s cubic-bezier(.2,1.4,.4,1) forwards; }
+  @keyframes aqCorrect { to { opacity:1; transform:translate(-50%,-50%) scale(1); } }
+
+  /* Premiere-style timeline runner minigame */
+  #mini { position:fixed; inset:0; z-index:70; display:none; flex-direction:column;
+          align-items:center; justify-content:center; background:rgba(4,5,8,0.94); }
+  #miniTitle { color:#c8a6ff; font-family:'Courier New',monospace; font-size:17px; letter-spacing:5px;
+               margin-bottom:10px; text-shadow:0 0 14px rgba(160,110,255,.6); }
+  #miniCanvas { width:min(94vw,1280px); height:auto; border:1px solid #2b2f3a;
+                box-shadow:0 18px 60px rgba(0,0,0,.8); background:#1e2129; }
+  #miniHint { color:#7f8794; font-family:'Courier New',monospace; font-size:13px; letter-spacing:2px;
+              margin-top:10px; }
+</style>
+</head>
+<body>
+<canvas id="c"></canvas>
+
+<div id="flashFx"></div>
+<div id="dmgFx"></div>
+<div id="critFx"></div>
+<div id="shieldFx"></div>
+<div id="clawFx"><b></b><i></i><i></i><i></i><i></i></div>
+
+<div id="hud">
+  <div class="vfCorner" id="vfTL"></div>
+  <div class="vfCorner" id="vfTR"></div>
+  <div class="vfCorner" id="vfBL"></div>
+  <div class="vfCorner" id="vfBR"></div>
+  <div id="crosshair"></div>
+  <div id="rec"><span class="dot"></span>REC</div>
+  <div id="roundBadge">
+    <div id="rbLabel">ROUND</div>
+    <div id="rbNum">1</div>
+  </div>
+  <div id="scoreBox">
+    <div id="scoreLabel">SCORE</div>
+    <div id="scoreVal">0</div>
+    <div id="hiScore">BEST 0</div>
+    <div id="livesBox"></div>
+  </div>
+  <div id="roundInfo"></div>
+  <div id="stats"></div>
+  <div id="bars">
+    <div id="shieldRow" style="display:none">
+      <div class="barLabel" style="color:#8fd9ff">SHIELD</div>
+      <div class="barOuter"><div class="barInner" id="shieldBar"></div></div>
+    </div>
+    <div class="barLabel">HEALTH</div>
+    <div class="barOuter"><div class="barInner" id="hpBar"></div></div>
+    <div class="barLabel" id="chargeLabel">FLASH &nbsp;<span id="flashPips"></span></div>
+    <div class="barOuter"><div class="barInner" id="chargeBar"></div></div>
+  </div>
+  <div id="toast"></div>
+  <div id="prompt"></div>
+  <div id="wepName"></div>
+</div>
+
+<div id="wheel">
+  <svg id="wheelSvg" viewBox="-160 -160 320 320"></svg>
+  <div id="wheelLabel"></div>
+</div>
+
+<div id="alienQuiz">
+  <div class="aqTitle">Name That Alien</div>
+  <form id="aqForm" autocomplete="off">
+    <input id="aqInput" placeholder="type a name…" maxlength="24" autocomplete="off" spellcheck="false">
+    <button id="aqBtn" type="submit">Submit</button>
+  </form>
+  <div id="aqResult">Correct!</div>
+</div>
+
+<div id="rewardPop">
+  <div class="rpTag">Mystery Box</div>
+  <div class="rpIcon" id="rpIcon">?</div>
+  <div class="rpName" id="rpName"></div>
+  <div class="rpDesc" id="rpDesc"></div>
+  <div class="rpBar"><i></i></div>
+</div>
+
+<div id="mini">
+  <div id="miniTitle">PREMIERE PRO — TIMELINE RUNNER</div>
+  <canvas id="miniCanvas" width="1280" height="620"></canvas>
+  <div id="miniHint">SPACE / CLICK to jump &nbsp;·&nbsp; survive the timeline &nbsp;·&nbsp; ESC to bail</div>
+</div>
+
+<div class="overlay" id="startOverlay">
+  <div class="menuCard">
+    <div class="eyebrow">Camp Media Lab</div>
+    <h1>Digi Defense</h1>
+    <div class="rule"></div>
+    <h2>70 Clark Rd &middot; Union Dale, PA</h2>
+
+    <div class="keyGrid">
+      <div class="keyRow"><div class="ks"><kbd>W</kbd><kbd>A</kbd><kbd>S</kbd><kbd>D</kbd></div><span class="lbl">Move</span></div>
+      <div class="keyRow"><div class="ks"><kbd>Mouse</kbd></div><span class="lbl">Look</span></div>
+      <div class="keyRow"><div class="ks"><kbd>Shift</kbd></div><span class="lbl">Sprint</span></div>
+      <div class="keyRow"><div class="ks"><kbd>Space</kbd></div><span class="lbl">Jump</span></div>
+      <div class="keyRow"><div class="ks"><kbd>Click</kbd></div><span class="lbl">Attack</span></div>
+      <div class="keyRow"><div class="ks"><kbd>Tab</kbd></div><span class="lbl">Weapon Wheel</span></div>
+      <div class="keyRow"><div class="ks"><kbd>1</kbd><span class="dash">–</span><kbd>5</kbd></div><span class="lbl">Quick Swap</span></div>
+      <div class="keyRow"><div class="ks"><kbd>M</kbd></div><span class="lbl">Mute Sound</span></div>
+      <div class="keyRow"><div class="ks"><kbd>Esc</kbd></div><span class="lbl">Release Cursor</span></div>
+    </div>
+
+    <div class="go">CLICK TO START</div>
+  </div>
+  <div class="credits">Built with three.js (MIT) &middot; "Camera 01" by Poly Haven (CC0) &middot;
+    "Sponge Neighbor - Rigged" by AndruBanana (CC-BY-4.0) &middot;
+    "Animated Realistic Bear" by AnimalMesh 3D (CC-BY-4.0) &middot;
+    "area 9 golf cart" by maxdragonn (CC-BY-4.0) &middot;
+    "Dancing Alien" by nthmn.exe (CC-BY-NC-SA-4.0) &middot;
+    "SanDisk SD Card" by Kiran Kumar (CC-BY-4.0)</div>
+</div>
+
+<div class="overlay" id="gameoverOverlay">
+  <h1>You died</h1>
+  <p id="goStats"></p>
+  <div class="go">▶ CLICK TO RESTART</div>
+</div>
+
+<script type="importmap">
+{ "imports": { "three": "./three.module.js", "three/addons/": "./jsm/" } }
+</script>
+<script type="module">
+  // cache-buster so code edits always take effect on reload
+  import('./game.js?v=' + Date.now());
+</script>
+</body>
+</html>

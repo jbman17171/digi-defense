@@ -1,0 +1,11 @@
+Model Information:
+* title:	Sponge Neighbor - Rigged [Game Ready]
+* source:	https://sketchfab.com/3d-models/sponge-neighbor-rigged-game-ready-ae0280d2117c4ee49190fe7218ff82bf
+* author:	AndruBanana (https://sketchfab.com/andrumart88)
+
+Model License:
+* license type:	CC-BY-4.0 (http://creativecommons.org/licenses/by/4.0/)
+* requirements:	Author must be credited. Commercial use is allowed.
+
+If you use this 3D model in your project be sure to copy paste this credit wherever you share it:
+This work is based on "Sponge Neighbor - Rigged [Game Ready]" (https://sketchfab.com/3d-models/sponge-neighbor-rigged-game-ready-ae0280d2117c4ee49190fe7218ff82bf) by AndruBanana (https://sketchfab.com/andrumart88) licensed under CC-BY-4.0 (http://creativecommons.org/licenses/by/4.0/)

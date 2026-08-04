@@ -1,0 +1,11 @@
+Model Information:
+* title:	Animated Realistic Bear – 3D Animal Model
+* source:	https://sketchfab.com/3d-models/animated-realistic-bear-3d-animal-model-77a1fcdc92e14db698767da9ee09f84a
+* author:	AnimalMesh 3D (https://sketchfab.com/AnimalMesh3D)
+
+Model License:
+* license type:	CC-BY-4.0 (http://creativecommons.org/licenses/by/4.0/)
+* requirements:	Author must be credited. Commercial use is allowed.
+
+If you use this 3D model in your project be sure to copy paste this credit wherever you share it:
+This work is based on "Animated Realistic Bear – 3D Animal Model" (https://sketchfab.com/3d-models/animated-realistic-bear-3d-animal-model-77a1fcdc92e14db698767da9ee09f84a) by AnimalMesh 3D (https://sketchfab.com/AnimalMesh3D) licensed under CC-BY-4.0 (http://creativecommons.org/licenses/by/4.0/)
