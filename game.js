@@ -4850,6 +4850,8 @@ window.DEBUG = {
   macs, damageMac, breakMac, seedMacPotion, refreshShield,
   // these live further down the file, so read them lazily (TDZ otherwise)
   playSfx, decodeSfx, setMuted, sfxBuf: () => sfxBuf, sfxFiles: () => SFX_FILES,
+  sfxDoorStart: () => sfxDoorStart(), sfxDoorStop: () => sfxDoorStop(),
+  doorLoopOn: () => !!doorLoop,
   tvVideo, tvTexture, eastTV,
 };
 
@@ -5244,6 +5246,7 @@ const SFX_FILES = {
   hurt:     ['hurt.ogg'],
   doorOpen: ['door_open.ogg'],
   doorClose:['door_close.ogg'],
+  doorMotor:['door_motor.ogg'],
   round:    ['round.ogg'],
   thunk:    ['thunk.ogg'],
   laser:    ['laser.ogg'],
@@ -5289,11 +5292,21 @@ async function decodeSfx() {
   }
 }
 
+// A one-shot fired from the tick loop would stack 60 copies a second into a
+// buzzing wash, so every sound has a minimum gap between retriggers.
+const SFX_GAP = { hit: 0.06, laser: 0.07, thunk: 0.05, whack: 0.05, glass: 0.06 };
+const SFX_GAP_DEFAULT = 0.04;
+const sfxLast = {};
+
 // returns false when there's no sample yet, so callers can fall back
 function playSfx(name, vol = 1, rate = 1) {
   const list = sfxBuf[name];
   if (!sfxBus || !list || !list.length) return false;
   const ctx = audio();
+  const now = ctx.currentTime;
+  const gap = SFX_GAP[name] !== undefined ? SFX_GAP[name] : SFX_GAP_DEFAULT;
+  if (sfxLast[name] !== undefined && now - sfxLast[name] < gap) return true;  // throttled, not missing
+  sfxLast[name] = now;
   const src = ctx.createBufferSource();
   src.buffer = list[(Math.random() * list.length) | 0];
   src.playbackRate.value = rate;
@@ -5302,6 +5315,30 @@ function playSfx(name, vol = 1, rate = 1) {
   src.connect(g).connect(sfxBus);
   src.start();
   return true;
+}
+
+// continuous sounds (the garage door motor) — started and stopped explicitly
+function playSfxLoop(name, vol = 1) {
+  const list = sfxBuf[name];
+  if (!sfxBus || !list || !list.length) return null;
+  const ctx = audio();
+  const src = ctx.createBufferSource();
+  src.buffer = list[0];
+  src.loop = true;
+  const g = ctx.createGain();
+  g.gain.setValueAtTime(0.0001, ctx.currentTime);
+  g.gain.linearRampToValueAtTime(vol, ctx.currentTime + 0.15);
+  src.connect(g).connect(sfxBus);
+  src.start();
+  return { src, g };
+}
+function stopSfxLoop(h) {
+  if (!h) return;
+  const ctx = audio();
+  h.g.gain.cancelScheduledValues(ctx.currentTime);
+  h.g.gain.setValueAtTime(h.g.gain.value, ctx.currentTime);
+  h.g.gain.linearRampToValueAtTime(0.0001, ctx.currentTime + 0.18);
+  setTimeout(() => { try { h.src.stop(); } catch (_) {} }, 300);
 }
 
 function setMuted(m) {
@@ -5321,8 +5358,25 @@ const synthSfx = {
 sfxShutter   = () => { playSfx('shutter', 0.55, rnd(0.95, 1.05)) || synthSfx.shutter(); };
 sfxRobotDie  = () => { playSfx('enemyDie', 0.5, rnd(0.9, 1.1))   || synthSfx.robotDie(); };
 sfxHurt      = () => { playSfx('hurt', 0.6, rnd(0.9, 1.1))       || synthSfx.hurt(); };
-sfxDoorStart = () => { playSfx('doorOpen', 0.55)                 || synthSfx.doorStart(); };
-sfxDoorStop  = () => { playSfx('doorClose', 0.5)                 || synthSfx.doorStop(); };
+// The doors are a START/STOP pair, not one-shots: the tick loop calls
+// sfxDoorStop() every single frame the doors aren't moving, and relies on it
+// being a no-op once the motor is already off. Both must stay idempotent.
+let doorLoop = null;
+sfxDoorStart = () => {
+  if (doorLoop) return;                        // motor's already running
+  doorLoop = playSfxLoop('doorMotor', 0.18);
+  if (doorLoop) playSfx('doorOpen', 0.45);     // clunk as it takes up
+  else synthSfx.doorStart();                   // no sample — fall back to the hum
+};
+sfxDoorStop = () => {
+  if (doorLoop) {
+    stopSfxLoop(doorLoop);
+    doorLoop = null;
+    playSfx('doorClose', 0.4);                 // clunk as it settles
+  } else {
+    synthSfx.doorStop();                       // guarded internally, safe every frame
+  }
+};
 sfxRound     = () => { playSfx('round', 0.6)                     || synthSfx.round(); };
 sfxThunk     = () => { playSfx('thunk', 0.6, rnd(0.9, 1.15))     || synthSfx.thunk(); };
 sfxLaser     = () => { playSfx('laser', 0.22, rnd(0.9, 1.2))     || synthSfx.laser(); };
