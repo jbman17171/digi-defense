@@ -736,11 +736,16 @@ function pineMat(repX, repY, tex = pineWallTex) {
 
 // ---------- collision ----------
 const colliders = [];   // {minX,maxX,minZ,maxZ,h} — h lets you jump over low furniture
-function addCollider(minX, maxX, minZ, maxZ, h = 0.95) { colliders.push({ minX, maxX, minZ, maxZ, h }); }
+// returns the box so callers can flip `off` later (a door that gets smashed open)
+function addCollider(minX, maxX, minZ, maxZ, h = 0.95) {
+  const b = { minX, maxX, minZ, maxZ, h, off: false };
+  colliders.push(b);
+  return b;
+}
 // y = feet height of the mover; anything above a box's height passes over it
 function resolveCircle(pos, r, y = 0) {
   for (const b of colliders) {
-    if (y >= b.h) continue;
+    if (b.off || y >= b.h) continue;
     const cx = Math.max(b.minX, Math.min(pos.x, b.maxX));
     const cz = Math.max(b.minZ, Math.min(pos.z, b.maxZ));
     const dx = pos.x - cx, dz = pos.z - cz;
@@ -756,6 +761,7 @@ function resolveCircle(pos, r, y = 0) {
 function supportHeight(x, z, r = 0.3) {
   let best = 0;
   for (const b of colliders) {
+    if (b.off) continue;
     if (x > b.minX - r && x < b.maxX + r && z > b.minZ - r && z < b.maxZ + r) best = Math.max(best, b.h);
   }
   return best;
@@ -812,7 +818,11 @@ const EAST_DOOR = { z0: -0.8, z1: 1.1, y0: 0, y1: 2.1 };
 const rearDoors = [];
 let rearOpen = 0, rearTarget = 0;
 // the staff-room door SpongeBob bursts out of on round 4
-let staffDoor = null, staffOpen = 0, staffTarget = 0;
+let staffDoor = null, staffTarget = 0;
+// both back-room doors: three hits to smash open, then the room is yours
+const sideDoors = [];
+const SIDE_DOOR_HP = 3;
+let crackStage = null;      // [light, heavy] damage decals, built with the doors
 {
   const opens = [...EAST_WINS, EAST_DOOR].sort((a, b) => a.z0 - b.z0);
   let cur = -9;
@@ -884,9 +894,38 @@ const SOUTH_WINS = [
 addCollider(5.85, 6.35, -9.2, EAST_DOOR.z0, 9);
 addCollider(5.85, 6.35, EAST_DOOR.z1, 9.2, 9);
 addCollider(-6.2, 6.2, -9.35, -8.85, 9);
-// south wall, split so the staff-room doorway is walkable once it opens
+// South wall, split around both back-room doorways. The staff gap stays clear
+// so SpongeBob can charge through it; the gear gap is plugged until you smash
+// that door open (see SIDE_ROOMS).
 addCollider(-6.2, -1.35, 8.85, 9.35, 9);
-addCollider(-0.35, 6.2, 8.85, 9.35, 9);
+addCollider(-0.35, 0.05, 8.85, 9.35, 9);
+const gearGapCollider = addCollider(0.05, 1.05, 8.85, 9.35, 9);
+addCollider(1.05, 6.2, 8.85, 9.35, 9);
+
+// ---- the two back rooms you can break into ----
+// Doorway x-ranges match the SOUTH_WINS openings; the room bounds match what
+// backRoom() builds behind the wall. `open` gates the player's z clamp.
+const SIDE_ROOMS = {
+  // x0/x1 sit slightly OUTSIDE the wall colliders on purpose: the clamp runs
+  // before resolveCircle, so if the two disagreed a fast frame could get
+  // yanked back through the wall instead of pushed off it.
+  staff: { label: 'STAFF ROOM', cx: -2.9, gap0: -1.35, gap1: -0.35,
+           x0: -5.95, x1: 0.06, zFar: 12.35, open: false, gapCollider: null },
+  gear:  { label: 'GEAR ROOM',  cx:  2.9, gap0:  0.05, gap1:  1.05,
+           x0: -0.06, x1: 5.95, zFar: 12.35, open: false, gapCollider: gearGapCollider },
+};
+function anySideRoomOpen() {
+  return SIDE_ROOMS.staff.open || SIDE_ROOMS.gear.open;
+}
+// which room, if any, the player is allowed to be standing in at this x/z
+function openSideRoomAt(x, z) {
+  for (const r of [SIDE_ROOMS.staff, SIDE_ROOMS.gear]) {
+    if (!r.open) continue;
+    if (z < 9.4) { if (x > r.gap0 && x < r.gap1) return r; }
+    else if (x > r.x0 && x < r.x1) return r;
+  }
+  return null;
+}
 
 // ---- flat pine ceiling, boards running along the long (z) axis ----
 {
@@ -984,6 +1023,52 @@ for (const x of [3.1, 4.6]) fakeWindow(x, 1.95, -8.86, 0.95, 0.9, Math.PI);
   // knotty pine 6-panel doors
   const doorMat = new THREE.MeshStandardMaterial({ color: 0xc99e5f, roughness: 0.7 });
   const panelMat = new THREE.MeshStandardMaterial({ color: 0xb98c4e, roughness: 0.75 });
+
+  // Splintering damage decal: jagged branches out of an impact point, drawn
+  // dark with a pale highlight so it reads as broken wood at any distance.
+  function crackTexture(stage) {
+    const [c, x] = makeCanvas(256, 512);
+    x.clearRect(0, 0, 256, 512);
+    x.lineCap = 'round';
+    const hits = stage === 1 ? 1 : 3;
+    for (let h = 0; h < hits; h++) {
+      const ox = 128 + rnd(-52, 52), oy = 250 + rnd(-90, 90);
+      const arms = stage === 1 ? 5 : 8;
+      for (let a = 0; a < arms; a++) {
+        let px = ox, py = oy;
+        let ang = (a / arms) * Math.PI * 2 + rnd(-0.4, 0.4);
+        let w = stage === 1 ? 2.6 : 4.4;
+        const segs = stage === 1 ? 4 : 7;
+        x.beginPath();
+        x.moveTo(px, py);
+        for (let s = 0; s < segs; s++) {
+          ang += rnd(-0.5, 0.5);
+          const len = rnd(14, 34) * (stage === 1 ? 0.8 : 1.15);
+          px += Math.cos(ang) * len; py += Math.sin(ang) * len;
+          x.lineTo(px, py);
+        }
+        x.strokeStyle = 'rgba(24,14,6,0.92)'; x.lineWidth = w; x.stroke();
+        x.strokeStyle = 'rgba(232,206,164,0.5)'; x.lineWidth = w * 0.35; x.stroke();
+      }
+      // a blown-out hole once it's really taken a beating
+      if (stage === 2) {
+        x.beginPath();
+        for (let a = 0; a < 12; a++) {
+          const r = rnd(9, 20), t = (a / 12) * Math.PI * 2;
+          const fx = ox + Math.cos(t) * r, fy = oy + Math.sin(t) * r;
+          a ? x.lineTo(fx, fy) : x.moveTo(fx, fy);
+        }
+        x.closePath();
+        x.fillStyle = 'rgba(12,8,4,0.85)'; x.fill();
+      }
+    }
+    const t = new THREE.CanvasTexture(c);
+    t.colorSpace = THREE.SRGBColorSpace;
+    t.anisotropy = ANISO;
+    return t;
+  }
+  crackStage = [crackTexture(1), crackTexture(2)];
+
   function pineDoor(x, hingeSide) {
     // casing only — jambs and a head, so the opening stays see-through
     for (const dx of [-0.53, 0.53]) {
@@ -1010,12 +1095,34 @@ for (const x of [3.1, 4.6]) fakeWindow(x, 1.95, -8.86, 0.95, 0.9, Math.PI);
     }
     const knob = new THREE.Mesh(new THREE.SphereGeometry(0.035, 10, 10), matBlackMetal);
     knob.position.set(-hingeSide * 0.36, 1.02, -0.07); g.add(knob);
+
+    // Damage decals sit a hair proud of each face of the slab, hidden until
+    // the door starts taking hits.
+    const cracks = [];
+    for (const face of [-1, 1]) {
+      const m = new THREE.Mesh(new THREE.PlaneGeometry(0.95, 2.05),
+        new THREE.MeshBasicMaterial({ map: crackStage[0], transparent: true,
+                                      opacity: 0, depthWrite: false }));
+      m.position.set(0, 1.025, face * 0.038);
+      if (face < 0) m.rotation.y = Math.PI;
+      m.visible = false;
+      g.add(m);
+      cracks.push(m);
+    }
+
     pivot.add(g);
     world.add(pivot);
-    return { pivot, s: hingeSide };
+    const d = {
+      pivot, s: hingeSide, leaf: g, slab, cracks,
+      hit: new THREE.Vector3(x, 1.05, 8.82),   // what the weapons aim at
+      hp: SIDE_DOOR_HP, broken: false, open: 0, room: null,
+    };
+    sideDoors.push(d);
+    return d;
   }
   staffDoor = pineDoor(-0.85, -1);    // the one nearest the staff room
-  pineDoor(0.55, 1);
+  staffDoor.room = SIDE_ROOMS.staff;
+  pineDoor(0.55, 1).room = SIDE_ROOMS.gear;
 
   sign('STAFF ROOM', -2.9, 2.62, 8.84, Math.PI, 0.85);
   sign('GEAR ROOM', 2.9, 2.62, 8.84, Math.PI, 0.85);
@@ -1469,6 +1576,14 @@ function backRoom(cx, label) {
   mkWall(hw * 2 + 0.3, 0.15, cx, z1);
   mkWall(0.15, z1 - z0, cx - hw, (z0 + z1) / 2);
   mkWall(0.15, z1 - z0, cx + hw, (z0 + z1) / 2);
+  // Now that you can walk in here, the walls need to be solid. They start a
+  // little past the doorway so they never register as something to stand on
+  // while you're still in the opening.
+  addCollider(cx - hw - 0.12, cx - hw + 0.12, 9.25, z1 + 0.2, 9);
+  addCollider(cx + hw - 0.12, cx + hw + 0.12, 9.25, z1 + 0.2, 9);
+  addCollider(cx - hw, cx + hw, z1 - 0.12, z1 + 0.2, 9);
+  // the iMac desk along the back wall
+  addCollider(cx - 1.85, cx + 1.85, z1 - 0.9, z1 - 0.2, 0.78);
 
   // desk of iMacs facing the window so you see the screens from the main room
   const top = new THREE.Mesh(new THREE.BoxGeometry(3.6, 0.05, 0.62), matDarkWood);
@@ -1495,6 +1610,96 @@ function backRoom(cx, label) {
 }
 backRoom(-2.9, 'STAFF ROOM');
 backRoom(2.9, 'GEAR ROOM');
+
+// ============================================================
+// TREASURE CHEST — the payoff for breaking into the gear room
+// ============================================================
+// Sits in the room on your left as you face the back-room doors. Walk up to it
+// and the lid swings open and a shield potion pops out onto the floor, which
+// you still have to step on. It re-arms at the top of every round, so the trip
+// stays worth making — but it is a trip away from the fight to make it.
+const chest = (() => {
+  const g = new THREE.Group();
+  const wood = new THREE.MeshStandardMaterial({ color: 0x6b4326, roughness: 0.72 });
+  const trim = new THREE.MeshStandardMaterial({ color: 0xc9a227, roughness: 0.34, metalness: 0.85 });
+
+  const W = 0.72, D = 0.46, H = 0.34;
+  const base = new THREE.Mesh(new THREE.BoxGeometry(W, H, D), wood);
+  base.position.y = H / 2; base.castShadow = true; base.receiveShadow = true; g.add(base);
+  for (const dx of [-W / 2 + 0.05, 0, W / 2 - 0.05]) {          // iron straps
+    const s = new THREE.Mesh(new THREE.BoxGeometry(0.05, H + 0.01, D + 0.012), trim);
+    s.position.set(dx, H / 2, 0); g.add(s);
+  }
+
+  // lid on a hinge along the back edge
+  const lid = new THREE.Group();
+  lid.position.set(0, H, -D / 2);
+  const dome = new THREE.Mesh(new THREE.CylinderGeometry(D / 2, D / 2, W, 14, 1, false, 0, Math.PI), wood);
+  dome.rotation.z = Math.PI / 2;
+  dome.position.set(0, 0, D / 2);
+  dome.castShadow = true;
+  lid.add(dome);
+  for (const dx of [-W / 2 + 0.05, 0, W / 2 - 0.05]) {
+    const s = new THREE.Mesh(new THREE.CylinderGeometry(D / 2 + 0.008, D / 2 + 0.008, 0.05, 14, 1, false, 0, Math.PI), trim);
+    s.rotation.z = Math.PI / 2;
+    s.position.set(dx, 0, D / 2);
+    lid.add(s);
+  }
+  g.add(lid);
+
+  const latch = new THREE.Mesh(new THREE.BoxGeometry(0.11, 0.13, 0.04), trim);
+  latch.position.set(0, H - 0.03, D / 2 + 0.005); g.add(latch);
+
+  // the glow that spills out once it's open
+  const glow = new THREE.PointLight(0x8fe4ff, 0, 2.6, 1.8);
+  glow.position.set(0, H + 0.15, 0);
+  g.add(glow);
+
+  const R = SIDE_ROOMS.gear;
+  g.position.set(R.cx + 0.1, 0, 10.35);
+  g.rotation.y = Math.PI;                    // faces the doorway you came in by
+  world.add(g);
+  addCollider(g.position.x - W / 2 - 0.06, g.position.x + W / 2 + 0.06,
+              g.position.z - D / 2 - 0.06, g.position.z + D / 2 + 0.06, H + 0.02);
+  return { g, lid, latch, glow, armed: true, lidT: 0, opening: false };
+})();
+
+// re-stocked at the top of each round, so the room stays worth the detour
+function armChest() {
+  chest.armed = true;
+  chest.opening = false;
+  chest.latch.visible = true;
+}
+
+function updateChest(dt) {
+  // pop open when you get close enough to reach it
+  if (chest.armed && !chest.opening && SIDE_ROOMS.gear.open) {
+    const d = Math.hypot(player.pos.x - chest.g.position.x, player.pos.z - chest.g.position.z);
+    if (d < 1.35) {
+      chest.opening = true;
+      chest.armed = false;
+      chest.latch.visible = false;
+      sfxRound();
+      spawnSparks(chest.g.position.clone().setY(0.5), 0x8fe4ff, 20, 1.2);
+      // out of the mouth toward the doorway, so it lands on open floor in here
+      const out = chest.g.position.clone();
+      out.z -= 0.5;
+      out.y = 0.55;
+      spawnDrop('shield', out);
+    }
+  }
+  if (chest.opening && chest.lidT < 1) {
+    chest.lidT = Math.min(1, chest.lidT + dt * 2.6);
+    // ease out so it flops open and settles
+    const k = 1 - Math.pow(1 - chest.lidT, 3);
+    chest.lid.rotation.x = -k * 1.95;
+    chest.glow.intensity = 5 * k;
+  } else if (!chest.opening && chest.lidT > 0) {
+    chest.lidT = Math.max(0, chest.lidT - dt * 3);
+    chest.lid.rotation.x = -chest.lidT * 1.95;
+    chest.glow.intensity = 5 * chest.lidT;
+  }
+}
 
 // ---- animated sponge guy pacing around the staff room ----
 function spongeTexture() {
@@ -3440,10 +3645,10 @@ function useExtraLife() {
 // WEAPONS — camera, LARP foam sword, tennis racket, SD card shuriken
 // ============================================================
 const FLASH_MAG = 2;        // shots before the reload
-const FLASH_GAP = 0.22;     // beat between the two, so it reads as two pops
-const FLASH_RELOAD = 1.6;   // slow wind-up once both are gone
+const FLASH_GAP = 0.18;     // beat between the two, so it reads as two pops
+const FLASH_RELOAD = 0.85;  // wind-up once both are gone
 const WEAPONS = [
-  { id: 'camera', name: 'FLASH CAMERA', melee: false, cd: 0.85 },
+  { id: 'camera', name: 'FLASH CAMERA', melee: false, cd: 0.55 },
   { id: 'sword', name: 'LARP FOAM SWORD', melee: true, cd: 0.42, reach: 2.6, arc: 0.85, dmg: 2 },
   { id: 'racket', name: 'TENNIS RACKET', melee: true, cd: 0.5, reach: 2.4, arc: 0.7, dmg: 1 },
   { id: 'sdcard', name: 'SD CARD SHURIKEN', melee: false, cd: 0.22 },
@@ -3646,6 +3851,8 @@ function meleeSwing() {
                   w.reach * 0.75, 1)) hitAny = true;
   if (damageMac(camera.position.clone().addScaledVector(fwd, w.reach * 0.6),
                 w.reach * 0.6, 2)) hitAny = true;
+  if (damageSideDoor(camera.position.clone().addScaledVector(fwd, w.reach * 0.6),
+                     w.reach * 0.8, 1)) hitAny = true;
   if (hitAny) sfxWhack();
 }
 
@@ -3942,6 +4149,80 @@ function updateMacBursts(dt) {
   }
 }
 
+// ============================================================
+// BREAKABLE BACK-ROOM DOORS
+// ============================================================
+// Three hits from anything. The first two spread cracks across the slab, the
+// third blows it off the latch and leaves the room open for the rest of the run.
+function hurtSideDoor(d, amount = 1) {
+  if (d.broken) return false;
+  d.hp -= amount;
+  const stage = Math.min(1, Math.max(0, SIDE_DOOR_HP - 1 - d.hp));
+  for (const c of d.cracks) {
+    c.visible = true;
+    c.material.map = crackStage[stage];
+    c.material.opacity = d.hp === SIDE_DOOR_HP - 1 ? 0.75 : 1;
+    c.material.needsUpdate = true;
+  }
+  // the whole leaf shudders in the frame
+  d.leaf.rotation.z = rnd(-0.02, 0.02);
+  spawnSparks(d.hit.clone(), 0xc99e5f, 8, 0.7);
+  addShake(0.12);
+  sfxThunk();
+  if (d.hp <= 0) breakSideDoor(d);
+  return true;
+}
+
+function breakSideDoor(d) {
+  d.broken = true;
+  d.leaf.rotation.z = 0;
+  for (const c of d.cracks) { c.material.map = crackStage[1]; c.material.opacity = 1; }
+  // splinters off the latch edge
+  for (let i = 0; i < 16; i++) {
+    const p = new THREE.Mesh(
+      new THREE.BoxGeometry(rnd(0.03, 0.12), rnd(0.02, 0.05), rnd(0.02, 0.06)),
+      new THREE.MeshStandardMaterial({ color: 0xc09257, roughness: 0.8 }));
+    p.position.copy(d.hit).add(new THREE.Vector3(rnd(-0.4, 0.4), rnd(-0.7, 0.8), 0));
+    p.userData.v = new THREE.Vector3(rnd(-1.8, 1.8), rnd(1.4, 3.8), rnd(-3.4, -1));
+    p.userData.ttl = 1.4;
+    scene.add(p);
+    debris.push(p);
+  }
+  if (d.room) {
+    d.room.open = true;
+    if (d.room.gapCollider) d.room.gapCollider.off = true;
+    showToast(`${d.room.label} IS OPEN`, 2200);
+  }
+  addShake(0.45);
+  sfxGlass();
+  playSfx('doorOpen', 0.6);
+  game.score += 50;
+}
+
+// point-and-radius, same shape as damageMac — for melee and thrown SD cards
+function damageSideDoor(point, radius = 0.75, amount = 1) {
+  let any = false;
+  for (const d of sideDoors) {
+    if (d.broken) continue;
+    if (d.hit.distanceTo(point) > radius) continue;
+    if (hurtSideDoor(d, amount)) any = true;
+  }
+  return any;
+}
+
+// cone/ray test, for the flash camera and the laser camcorder
+function aimedSideDoor(fwd, maxDist, cosArc) {
+  for (const d of sideDoors) {
+    if (d.broken) continue;
+    const to = d.hit.clone().sub(camera.position);
+    const dist = to.length();
+    if (dist > maxDist) continue;
+    if (to.normalize().dot(fwd) < cosArc) continue;
+    return d;
+  }
+  return null;
+}
+
 // one intact computer per round is hiding a shield potion
 function seedMacPotion() {
   for (const m of macs) m.potion = false;
@@ -4076,6 +4357,17 @@ function dropBody(key) {
   return g;
 }
 
+// Where a drop is allowed to bounce. Anything spawned behind the south wall
+// belongs to that back room — without this it gets batted back into the main
+// hall and lands on the wrong side of the door you just broke down.
+function dropBounds(from) {
+  if (from.z > 9.2) {
+    const r = from.x < 0 ? SIDE_ROOMS.staff : SIDE_ROOMS.gear;
+    return { x0: r.x0 + 0.45, x1: r.x1 - 0.45, z0: 9.5, z1: r.zFar - 0.3 };
+  }
+  return { x0: -5.5, x1: 5.5, z0: -8.5, z1: 8.5 };
+}
+
 function spawnDrop(key, from) {
   if (!REWARD_INFO[key]) return;
   const holder = new THREE.Group();
@@ -4091,6 +4383,7 @@ function spawnDrop(key, from) {
     v: new THREE.Vector3(Math.cos(a) * rnd(0.9, 2.4), rnd(5.4, 6.8), Math.sin(a) * rnd(0.9, 2.4)),
     landed: false, ttl: 34, t: rnd(0, 6), spin: rnd(2.5, 5) * (Math.random() < 0.5 ? -1 : 1),
     tumble: new THREE.Vector3(rnd(-7, 7), rnd(-7, 7), rnd(-7, 7)),
+    bounds: dropBounds(from),
   });
   showToast(`${REWARD_INFO[key].icon} ${REWARD_INFO[key].name.toUpperCase()} — STEP ON IT TO USE IT`, 3200);
 }
@@ -4108,9 +4401,10 @@ function updateDrops(dt) {
     if (!d.landed) {
       d.v.y -= 16 * dt;
       p.addScaledVector(d.v, dt);
-      // keep it inside the room — walls bat it back in
-      if (p.x < -5.5 || p.x > 5.5) { p.x = Math.max(-5.5, Math.min(5.5, p.x)); d.v.x *= -0.5; }
-      if (p.z < -8.5 || p.z > 8.5) { p.z = Math.max(-8.5, Math.min(8.5, p.z)); d.v.z *= -0.5; }
+      // keep it inside whichever room it was dropped in — walls bat it back
+      const bd = d.bounds;
+      if (p.x < bd.x0 || p.x > bd.x1) { p.x = Math.max(bd.x0, Math.min(bd.x1, p.x)); d.v.x *= -0.5; }
+      if (p.z < bd.z0 || p.z > bd.z1) { p.z = Math.max(bd.z0, Math.min(bd.z1, p.z)); d.v.z *= -0.5; }
       d.body.rotation.x += d.tumble.x * dt;
       d.body.rotation.y += d.tumble.y * dt;
       d.body.rotation.z += d.tumble.z * dt;
@@ -4644,6 +4938,11 @@ function fireLaser() {
       if (m.hp <= 0) breakMac(m);
     }
   }
+  // lasers chew through the back-room doors as well
+  {
+    const d = aimedSideDoor(fwd, 26, Math.cos(0.06));
+    if (d) hurtSideDoor(d, 1);
+  }
   // lasers chew the crate open too
   if (crate && crate.landed) {
     const to = crate.mesh.position.clone().setY(0.4).sub(camera.position);
@@ -5045,6 +5344,7 @@ window.DEBUG = {
   startWave, endWave, MIRROR, revealMirror, refreshRoundBadge,
   WEATHER, setWeather, weatherForRound, strikeBolt, wx, updateWeather,
   macs, damageMac, breakMac, seedMacPotion, refreshShield,
+  sideDoors, hurtSideDoor, breakSideDoor, damageSideDoor, SIDE_ROOMS, chest, armChest,
   // these live further down the file, so read them lazily (TDZ otherwise)
   playSfx, decodeSfx, setMuted, sfxBuf: () => sfxBuf, sfxFiles: () => SFX_FILES,
   sfxDoorStart: () => sfxDoorStart(), sfxDoorStop: () => sfxDoorStop(),
@@ -5136,7 +5436,7 @@ function startGame() {
   hud.style.display = 'block';
   canvas.requestPointerLock();
   audio();
-  decodeSfx();                      // the click is the gesture audio was waiting on
+  decodeSfx().then(startMusic);     // the click is the gesture audio was waiting on
   if (tvVideo) tvVideo.play().catch(() => {});
   game.state = 'intermission';
   game.round = 0;
@@ -5151,6 +5451,7 @@ function startGame() {
 function startWave() {
   game.round++;
   game.state = 'wave';
+  armChest();
   game.mysteryUsed = false;
   game.bossOut = false;
   game.portalUsed = false;
@@ -5164,10 +5465,8 @@ function startWave() {
   setTimeout(() => { if (game.state === 'wave') roundInfo.textContent = ''; }, 2600);
   refreshRoundBadge();
 
-  // a fresh sky for every round
-  const wthr = weatherForRound(game.round);
-  setWeather(wthr);
-  setTimeout(() => showToast(`${wthr.icon} ${wthr.name}`, 2800), 2700);
+  // a fresh sky for every round — no announcement, you can see it
+  setWeather(weatherForRound(game.round));
 
   // and a new computer hiding the shield potion
   seedMacPotion();
@@ -5209,11 +5508,13 @@ function endWave() {
   // an unopened crate stays put for the next round
   closePortal();
   // the laser camcorder is yours for good now — no revert
+  sfxRoundClear();
   showToast(`ROUND ${game.round} CLEAR — doors closing, +30 health`);
 }
 
 function gameOver() {
   game.state = 'gameover';
+  stopMusic();
   document.exitPointerLock();
   document.getElementById('goStats').innerHTML =
     `<span style="font-size:44px;color:#eaffea;display:inline-block;margin-top:4px">${game.score.toLocaleString()}</span>` +
@@ -5332,6 +5633,11 @@ addEventListener('mousedown', e => {
       if (crate.hp <= 0) breakCrate();
     }
   }
+  // a flash at a back-room door chips it open too
+  {
+    const d = aimedSideDoor(fwd, 9, Math.cos(0.34));
+    if (d) hurtSideDoor(d, 1);
+  }
   // the flash pops any screen you're pointed at — tight cone, they're small
   for (const m of macs) {
     if (m.broken) continue;
@@ -5391,7 +5697,12 @@ function updatePlayer(dt) {
   if (p.x > MIRROR.x1 - 0.35) p.x = MIRROR.x1 - 0.35;
   if (p.x > -6 && p.x < 6) {  // inside: N/S wall clamp
     if (p.z < -8.65) p.z = -8.65;
-    if (p.z > 8.65) p.z = 8.65;
+    if (p.z > 8.65) {
+      // the south wall only lets you through a doorway you've smashed open
+      const room = anySideRoomOpen() ? openSideRoomAt(p.x, p.z) : null;
+      if (!room) p.z = 8.65;
+      else if (p.z > room.zFar) p.z = room.zFar;
+    }
   } else if (p.x <= -6) {     // outside, west
     if (p.z < -14) p.z = -14;
     if (p.z > 14) p.z = 14;
@@ -5483,7 +5794,9 @@ const SFX_DEFAULTS = {
   glass:    ['glass.ogg'],
   explode:  ['explode.ogg'],
   shield:   ['potion.wav'],
-  pickup:   ['useitem.wav'],
+  pickup:   ['useitem.wav', 'itemused.wav'],
+  roundClear: ['levelcomplete.wav'],
+  music:    ['menumusic-loop.wav'],
   headshot: ['headshot.ogg'],
 };
 let SFX_FILES = { ...SFX_DEFAULTS };
@@ -5647,6 +5960,13 @@ function sfxExplode()  { playSfx('explode', 0.6, rnd(0.9, 1.1)); }
 function sfxShield()   { playSfx('shield', 0.55); }
 // sits under whatever the item itself plays, so keep it quiet
 function sfxPickup()   { playSfx('pickup', 0.4); }
+function sfxRoundClear() { playSfx('roundClear', 0.6); }
+
+// Background music. It runs on the sfx bus so the M key mutes it with
+// everything else, and it can only start once the samples have decoded.
+let musicLoop = null;
+function startMusic() { if (!musicLoop) musicLoop = playSfxLoop('music', 0.2); }
+function stopMusic()  { stopSfxLoop(musicLoop); musicLoop = null; }
 function sfxReload()   { playSfx('reload', 0.4); }
 
 // ============================================================
@@ -5793,6 +6113,7 @@ function tick() {
   // the sky keeps living even on the menu and between rounds
   updateWeather(dt, now);
   updateMacBursts(dt);
+  updateChest(dt);
 
   // fans spin always
   for (const f of fans) f.rotation.y += dt * 5;
@@ -5899,10 +6220,13 @@ function tick() {
   rearOpen += (rearTarget - rearOpen) * Math.min(1, dt * 2.2);
   for (const d of rearDoors) d.pivot.rotation.y = -d.s * rearOpen * Math.PI * 0.62;
 
-  // staff room door swings in for SpongeBob
-  if (staffDoor) {
-    staffOpen += (staffTarget - staffOpen) * Math.min(1, dt * 2.6);
-    staffDoor.pivot.rotation.y = staffDoor.s * staffOpen * Math.PI * 0.6;
+  // back-room doors: the staff one also swings in on cue for SpongeBob, and a
+  // smashed door slams the rest of the way and stays there
+  for (const d of sideDoors) {
+    const want = Math.max(d.broken ? 1 : 0, d === staffDoor ? staffTarget : 0);
+    d.open += (want - d.open) * Math.min(1, dt * (d.broken ? 6 : 2.6));
+    d.pivot.rotation.y = d.s * d.open * Math.PI * 0.62;
+    if (!d.broken && d.leaf.rotation.z) d.leaf.rotation.z *= Math.max(0, 1 - dt * 9);
   }
 
   // the timeline runner takes over completely while it's up
@@ -5947,7 +6271,7 @@ function tick() {
       if (player.invulnT <= 0) { livesBox.style.opacity = 1; refreshLives(); }
     }
 
-    // flash recharge — only once both frames are spent, and it takes a while
+    // flash recharge — only once both frames are spent
     if (game.flashCd > 0) game.flashCd -= dt;
     if (game.flashShots <= 0) {
       game.charge = Math.min(1, game.charge + dt / FLASH_RELOAD);
@@ -6083,6 +6407,7 @@ function tick() {
                  q.x < -6.2 || q.x > 8.4 || q.z < -9.2 || q.z > 9.2;
       if (!done && damageCrate(q, 0.75, 1)) done = true;
       if (!done && damageMac(q, 0.45, 1)) done = true;
+      if (!done && damageSideDoor(q, 0.6, 1)) done = true;
       if (!done) {
         for (const e of enemies) {
           if (e.state === 'dying') continue;

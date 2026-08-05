@@ -19,10 +19,12 @@
   "jump":      "jump.ogg",
   "land":      "land.ogg",
   "shield":    "potion.wav",
-  "pickup":    "useitem.wav",
+  "pickup":    ["useitem.wav", "itemused.wav"],
   "oneup":     "oneup.ogg",
 
   "round":     "round.ogg",
+  "roundClear": "levelcomplete.wav",
+  "music":     "menumusic-loop.wav",
   "portal":    "portal.ogg",
   "thunder":   "thunder.ogg",
   "doorOpen":  "door_open.ogg",

@@ -88,14 +88,16 @@ Setting a sound to `null` silences it deliberately:
 
 | Name | Plays when | Wants to be |
 | --- | --- | --- |
-| `round` | A round starts, mystery box breaks | Short fanfare or stinger. |
+| `round` | A round starts, mystery box breaks, a chest opens | Short fanfare or stinger. |
+| `roundClear` | You survive a round | Victory sting. |
+| `music` | **Loops** quietly under the whole run, from the start click until you die | Must loop seamlessly. The M key mutes it with everything else. |
 | `portal` | Rainbow annex portal opens | Whoosh or magical swell. |
 | `thunder` | Lightning during a storm round | Long rumble. Distance and rumble beat a sharp crack. |
 | `doorOpen` | Garage door starts moving | Metal clunk as it takes up slack. |
 | `doorClose` | Garage door settles shut | Clunk as it seats. |
 | `doorMotor` | **Loops** while a garage door moves | Must loop seamlessly — a steady motor hum, no fade in or out at the ends. |
 
-`doorMotor` is the only looping sound. If it clicks or pulses, the loop points
+`doorMotor` and `music` are the looping sounds. If it clicks or pulses, the loop points
 aren't clean; trim it to a whole number of cycles at a zero crossing.
 
 ## Where to find sounds

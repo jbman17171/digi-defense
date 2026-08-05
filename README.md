@@ -18,7 +18,7 @@ Runs entirely in the browser — no build step, no dependencies to install.
 | Click | Attack |
 | `Tab` | Weapon wheel |
 | `1`–`5` | Quick swap |
-| `M` | Mute sound |
+| `M` | Mute sound and music |
 | `Esc` | Release cursor |
 | `[` `]` | Graphics quality down / up |
 | `F3` | FPS and render stats |
@@ -57,8 +57,12 @@ count. `window.digiPerf` in the console has the same numbers plus
   pops out Smash-Bros style — walk over it to use it, or leave it alone.
   Rewards include a laser camcorder, an exposure bomb, a Premiere "Timeline
   Runner" minigame, and a rare 1-UP mushroom.
-- **Shootable computers.** Every iMac in the lab can be blown apart, and one
-  random machine each round is hiding a shield potion.
+- **Shootable computers.** Every iMac in the lab can be blown apart in one hit,
+  and one random machine each round is hiding a shield potion.
+- **Breakable back rooms.** Three hits splinters a staff-room or gear-room
+  door off its latch and the room is yours for the rest of the run. There's a
+  treasure chest in the gear room — the one on your left — that pops open with
+  a shield potion, restocked every round.
 - **Weather that changes every round** — clear, thunderstorm with real
   lightning, snow, wildfire haze, dead fog, and an aurora night.
 - **The rainbow annex** across the ravine, which stays hidden until round 6
