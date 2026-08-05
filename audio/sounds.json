@@ -1,0 +1,31 @@
+{
+  "_readme": "Drop a sound file in this folder, then put its filename below. See README.md.",
+  "_variants": "A list means pick one at random each time, so repeats don't grate.",
+
+  "shutter":   "shutter.ogg",
+  "reload":    "reload.ogg",
+  "laser":     "laser.ogg",
+  "swing":     "swing.ogg",
+  "whack":     "whack.ogg",
+  "thunk":     "thunk.ogg",
+
+  "hit":       ["hit1.ogg", "hit2.ogg", "hit3.ogg"],
+  "headshot":  "headshot.ogg",
+  "enemyDie":  "enemy_die.ogg",
+  "glass":     "glass.ogg",
+  "explode":   "explode.ogg",
+
+  "hurt":      "hurt.ogg",
+  "jump":      "jump.ogg",
+  "land":      "land.ogg",
+  "shield":    "potion.wav",
+  "pickup":    "useitem.wav",
+  "oneup":     "oneup.ogg",
+
+  "round":     "round.ogg",
+  "portal":    "portal.ogg",
+  "thunder":   "thunder.ogg",
+  "doorOpen":  "door_open.ogg",
+  "doorClose": "door_close.ogg",
+  "doorMotor": "door_motor.ogg"
+}

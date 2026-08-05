@@ -1218,7 +1218,7 @@ function iMac(x, y, z, ry, register = true) {
   macs.push({
     g, face, screen, chin,
     hit: new THREE.Vector3(x, y + 0.35, z),
-    hp: 2, broken: false, potion: false, smokeT: 0,
+    hp: 1, broken: false, potion: false, smokeT: 0,   // one hit and the screen goes
   });
 }
 function chair(x, z, ry) {
@@ -3952,8 +3952,8 @@ function seedMacPotion() {
 
 // ---------- the box can contain any of these ----------
 // weight = how often it turns up relative to the others
-const MYSTERY_REWARDS = ['camcorder', 'timeline', 'nuke', 'medkit', 'arsenal', 'life1up'];
-const REWARD_WEIGHTS = { camcorder: 3, timeline: 3, nuke: 3, medkit: 3, arsenal: 3, life1up: 1 };
+const MYSTERY_REWARDS = ['camcorder', 'timeline', 'nuke', 'medkit', 'arsenal', 'shield', 'life1up'];
+const REWARD_WEIGHTS = { camcorder: 3, timeline: 3, nuke: 3, medkit: 3, arsenal: 3, shield: 2, life1up: 1 };
 const REWARD_INFO = {
   camcorder: { icon: '🎥', name: 'Laser Camcorder', accent: '#4ec5ff',
                desc: 'Hold fire to spray cutting lasers until the round ends.' },
@@ -3967,7 +3967,7 @@ const REWARD_INFO = {
                desc: 'Double damage on every weapon for 25 seconds.' },
   life1up:   { icon: '🍄', name: '1-UP Mushroom', accent: '#ff5252',
                desc: 'An extra life. Die once and you get right back up.' },
-  // not in the box pool — this one only ever comes out of a computer
+  // turns up in the box now and then, and always from the rigged computer
   shield:    { icon: '🛡️', name: 'Shield Potion', accent: '#4ec5ff',
                desc: '100 points of shield soak up damage before your health.' },
 };
@@ -3987,16 +3987,17 @@ function showRewardPopup(key) {
   rpName.textContent = info.name;
   rpDesc.textContent = info.desc;
   rewardPop.classList.remove('hide', 'show');
-  rewardPop.style.display = 'block';
+  rewardPop.style.display = 'flex';
   void rewardPop.offsetWidth;               // restart the animations
   rewardPop.classList.add('show');
+  // keep this in step with the .rpBar drain in the stylesheet
   rewardTimer = setTimeout(() => {
     rewardPop.classList.add('hide');
     setTimeout(() => {
       rewardPop.classList.remove('show', 'hide');
       rewardPop.style.display = 'none';
-    }, 300);
-  }, 3200);
+    }, 220);
+  }, 1600);
 }
 
 // ============================================================
@@ -4144,6 +4145,7 @@ function updateDrops(dt) {
       spawnSparks(p.clone(), new THREE.Color(REWARD_INFO[d.key].accent).getHex(), 16, 1.1);
       scene.remove(d.holder);
       drops.splice(i, 1);
+      sfxPickup();                   // the grab; the reward then plays its own sound
       grantMysteryReward(d.key);
       continue;
     }
@@ -4162,7 +4164,9 @@ function clearDrops() {
 
 // weighted roll, skipping anything that would be a dud right now
 function pickMysteryReward() {
-  const pool = MYSTERY_REWARDS.filter(r => !(r === 'camcorder' && game.upgraded));
+  // don't waste a box on something the player is already holding
+  const pool = MYSTERY_REWARDS.filter(r =>
+    !(r === 'camcorder' && game.upgraded) && !(r === 'shield' && player.shield >= 100));
   let total = 0;
   for (const r of pool) total += REWARD_WEIGHTS[r] || 1;
   let roll = Math.random() * total;
@@ -5453,7 +5457,11 @@ function updatePlayerCamera(dt) {
 // The synth beeps above stay as a fallback: if a file 404s or won't decode,
 // the matching sfx call drops back to the oscillator version instead of going
 // silent. Lists of files mean "pick one at random" so repeats don't grate.
-const SFX_FILES = {
+//
+// TO SWAP A SOUND: drop your file in audio/ and point at it from
+// audio/sounds.json — see audio/README.md. That file wins over this table, so
+// you never have to come in here. This is only the fallback if it goes missing.
+const SFX_DEFAULTS = {
   shutter:  ['shutter.ogg'],
   reload:   ['reload.ogg'],
   enemyDie: ['enemy_die.ogg'],
@@ -5474,23 +5482,52 @@ const SFX_FILES = {
   hit:      ['hit1.ogg', 'hit2.ogg', 'hit3.ogg'],
   glass:    ['glass.ogg'],
   explode:  ['explode.ogg'],
-  shield:   ['shield.ogg'],
+  shield:   ['potion.wav'],
+  pickup:   ['useitem.wav'],
   headshot: ['headshot.ogg'],
 };
+let SFX_FILES = { ...SFX_DEFAULTS };
+const sfxSilenced = new Set();          // manifest entries set to null
 const sfxRaw = {}, sfxBuf = {};
 let sfxBus = null, sfxMuted = false;
 try { sfxMuted = localStorage.getItem('digiDefenseMute') === '1'; } catch (_) {}
 
+// A static site can't list a directory, so the folder declares itself. Anything
+// the manifest names replaces the default for that sound; anything it leaves
+// out keeps the default. A bad or missing manifest changes nothing.
+async function loadSfxManifest() {
+  try {
+    const r = await fetch('./audio/sounds.json', { cache: 'no-cache' });
+    if (!r.ok) return;
+    const m = await r.json();
+    for (const [k, v] of Object.entries(m)) {
+      if (k.startsWith('_')) continue;                    // comment keys
+      // null means "I want this one silent" — not "use the synth fallback"
+      if (v === null || v === '') { SFX_FILES[k] = []; sfxSilenced.add(k); continue; }
+      const list = (Array.isArray(v) ? v : [v]).filter(f => typeof f === 'string' && f);
+      if (list.length) SFX_FILES[k] = list;
+    }
+  } catch (e) {
+    console.warn('audio/sounds.json ignored:', e.message, '— using built-in sounds');
+  }
+}
+
 // fetch up front, decode once there's a context (which needs a user gesture)
-Promise.all(Object.entries(SFX_FILES).map(async ([k, files]) => {
-  sfxRaw[k] = await Promise.all(files.map(f =>
-    fetch('./audio/' + f).then(r => (r.ok ? r.arrayBuffer() : null)).catch(() => null)));
-})).catch(() => {});
+const sfxFetched = loadSfxManifest().then(() => Promise.all(
+  Object.entries(SFX_FILES).map(async ([k, files]) => {
+    sfxRaw[k] = await Promise.all(files.map(f =>
+      fetch('./audio/' + f).then(r => (r.ok ? r.arrayBuffer() : null))
+        .catch(() => null)));
+    if (files.length && sfxRaw[k].every(b => !b)) {
+      console.warn(`sfx "${k}": none of [${files}] loaded — falling back to the synth beep`);
+    }
+  }))).catch(() => {});
 
 let sfxDecoding = false;
 async function decodeSfx() {
   if (sfxDecoding || sfxBus) return;
   sfxDecoding = true;
+  await sfxFetched;                 // the manifest adds a hop; don't decode early
   const ctx = audio();
   sfxBus = ctx.createGain();
   sfxBus.gain.value = sfxMuted ? 0 : 0.85;
@@ -5514,6 +5551,7 @@ const sfxLast = {};
 
 // returns false when there's no sample yet, so callers can fall back
 function playSfx(name, vol = 1, rate = 1) {
+  if (sfxSilenced.has(name)) return true;   // muted on purpose, don't fall back
   const list = sfxBuf[name];
   if (!sfxBus || !list || !list.length) return false;
   const ctx = audio();
@@ -5607,6 +5645,8 @@ function sfxHeadshot() { playSfx('headshot', 0.5); }
 function sfxGlass()    { playSfx('glass', 0.55, rnd(0.9, 1.1)); }
 function sfxExplode()  { playSfx('explode', 0.6, rnd(0.9, 1.1)); }
 function sfxShield()   { playSfx('shield', 0.55); }
+// sits under whatever the item itself plays, so keep it quiet
+function sfxPickup()   { playSfx('pickup', 0.4); }
 function sfxReload()   { playSfx('reload', 0.4); }
 
 // ============================================================
