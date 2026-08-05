@@ -20,6 +20,34 @@ Runs entirely in the browser — no build step, no dependencies to install.
 | `1`–`5` | Quick swap |
 | `M` | Mute sound |
 | `Esc` | Release cursor |
+| `[` `]` | Graphics quality down / up |
+| `F3` | FPS and render stats |
+
+## Performance
+
+The game guesses a graphics tier from your machine on first run and remembers
+what you pick after that. If it runs badly, choose **LOW** on the start screen —
+or press `[` in game.
+
+| | LOW | MEDIUM | HIGH |
+| --- | --- | --- | --- |
+| Render resolution cap | 1x | 1.25x | 2x (retina) |
+| Bloom | off | on | on |
+| Shadows | off | 1024, every 3rd frame | 2048 soft, every frame |
+| Room point lights | 1 | 5 | 11 |
+| Texture ceiling | 512px | 1024px | 4096px |
+| GPU texture memory | ~38 MB | ~63 MB | ~147 MB |
+| Dust / precipitation | 0 / 600 | 260 / 1200 | 700 / 2200 |
+| Looping TV clip | off | on | on |
+
+On top of the tier, the renderer watches its own frame time and lowers or
+raises the render resolution while you play. If it bottoms out and is still
+below ~45 fps it starts switching effects off — bloom first, then shadows —
+and tells you what it dropped.
+
+`F3` shows FPS, frame time, the current resolution scale and the draw call
+count. `window.digiPerf` in the console has the same numbers plus
+`setQuality('low' | 'medium' | 'high')`.
 
 ## What's in it
 

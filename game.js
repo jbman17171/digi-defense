@@ -16,16 +16,89 @@ import { RoomEnvironment } from 'three/addons/environments/RoomEnvironment.js';
    iMac desks along the NE and SE walls, chesterfield couches + rugs.
    ============================================================ */
 
+// ============================================================
+// PERFORMANCE TIERS
+// ============================================================
+// The lab is lit by a dozen real point lights, casts soft shadows and runs a
+// bloom + grade chain on top — gorgeous on a desktop GPU, a slideshow on an
+// 8 GB laptop with integrated graphics. Everything expensive sits behind a
+// tier, the tier is guessed from the machine on first run, and the renderer
+// keeps re-tuning its own resolution while you play so the frame rate holds.
+const TIERS = {
+  low: {
+    label: 'LOW', maxPR: 1, minScale: 0.5,
+    bloom: false, shadows: false, shadowSize: 512, softShadows: false, shadowEvery: 6,
+    warmCans: 0, lightBoost: 1.5, dust: 0, fall: 600, aniso: 1, texMax: 512,
+    video: false, grain: 0.022, envRes: 0.1, fogFarMul: 0.75,
+  },
+  medium: {
+    label: 'MEDIUM', maxPR: 1.25, minScale: 0.6,
+    bloom: true, shadows: true, shadowSize: 1024, softShadows: false, shadowEvery: 3,
+    warmCans: 4, lightBoost: 1.2, dust: 260, fall: 1200, aniso: 4, texMax: 1024,
+    video: true, grain: 0.034, envRes: 0.04, fogFarMul: 1,
+  },
+  high: {
+    label: 'HIGH', maxPR: 2, minScale: 0.75,
+    bloom: true, shadows: true, shadowSize: 2048, softShadows: true, shadowEvery: 1,
+    warmCans: 10, lightBoost: 1, dust: 700, fall: 2200, aniso: 8, texMax: 4096,
+    video: true, grain: 0.042, envRes: 0.04, fogFarMul: 1,
+  },
+};
+const TIER_ORDER = ['low', 'medium', 'high'];
+
+// A first guess from whatever the browser is willing to tell us. deviceMemory
+// is rounded down and capped at 8 by Chrome, so 8 means "8 or more" — that
+// still lands on MEDIUM, and the adaptive scaler takes it from there.
+function guessTier() {
+  let gpu = '';
+  try {
+    const g = document.createElement('canvas').getContext('webgl');
+    const ext = g && g.getExtension('WEBGL_debug_renderer_info');
+    if (ext) gpu = g.getParameter(ext.UNMASKED_RENDERER_WEBGL) || '';
+  } catch (e) { /* fingerprint blockers hide this; fall through to the counts */ }
+  if (/swiftshader|llvmpipe|basic render|software/i.test(gpu)) return 'low';
+  const weak = /intel.*(hd|uhd) graphics|iris\D*[56]\d\d|mali|adreno [1-5]|powervr/i.test(gpu);
+  const mem = navigator.deviceMemory || 8;
+  const cores = navigator.hardwareConcurrency || 4;
+  if (weak || mem <= 4 || cores <= 2) return 'low';
+  if (mem <= 8 || cores <= 4) return 'medium';
+  return 'high';
+}
+
+let savedTier = null;
+try { savedTier = localStorage.getItem('dd_quality'); } catch (e) { /* private mode */ }
+if (!TIERS[savedTier]) savedTier = null;
+const perf = {
+  name: savedTier || guessTier(),
+  pinned: !!savedTier,   // player picked it by hand, so the menu says so
+  scale: 1,        // adaptive resolution, multiplied onto the tier's pixel-ratio cap
+  fps: 60, ms: 16.7,
+  frame: 0,
+  acc: 0, accFrames: 0, cooldown: 0, starved: 0,
+  showStats: false,
+};
+let TIER = TIERS[perf.name];
+
 // ---------- basics ----------
 const canvas = document.getElementById('c');
-const renderer = new THREE.WebGLRenderer({ canvas, antialias: true });
-renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
+// antialias is deliberately off: every frame goes through EffectComposer render
+// targets, so MSAA on the default framebuffer would only smooth the final
+// full-screen quad — pure cost, zero benefit.
+const renderer = new THREE.WebGLRenderer({
+  canvas, antialias: false, stencil: false, powerPreference: 'high-performance',
+});
+renderer.setPixelRatio(Math.min(devicePixelRatio, TIER.maxPR));
 renderer.setSize(innerWidth, innerHeight);
-renderer.shadowMap.enabled = true;
-renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+renderer.shadowMap.enabled = TIER.shadows;
+renderer.shadowMap.type = TIER.softShadows ? THREE.PCFSoftShadowMap : THREE.PCFShadowMap;
+// shadows are re-rendered on a schedule (see tick), not every single frame
+renderer.shadowMap.autoUpdate = false;
 renderer.outputColorSpace = THREE.SRGBColorSpace;
 renderer.toneMapping = THREE.ACESFilmicToneMapping;
 renderer.toneMappingExposure = 0.7;
+// the composer renders several passes per frame; keep the counters accumulating
+// across all of them instead of resetting on every internal render call
+renderer.info.autoReset = false;
 
 const scene = new THREE.Scene();
 scene.background = new THREE.Color(0xb9cdd8);          // overcast PA sky
@@ -37,7 +110,8 @@ const BASE_FOV = 72;
 // image-based lighting so metal/glass/leather pick up real room reflections
 {
   const pmrem = new THREE.PMREMGenerator(renderer);
-  scene.environment = pmrem.fromScene(new RoomEnvironment(renderer), 0.04).texture;
+  scene.environment = pmrem.fromScene(new RoomEnvironment(renderer), TIER.envRes).texture;
+  pmrem.dispose();   // the generator's scratch targets are dead weight after this
 }
 
 // ---------- post-processing: bloom + cinematic grade ----------
@@ -129,21 +203,114 @@ const FinalGrade = {
 const composer = new EffectComposer(renderer);
 composer.addPass(new RenderPass(scene, camera));
 const BLOOM_BASE = 0.34;
-const bloomPass = new UnrealBloomPass(
-  new THREE.Vector2(innerWidth, innerHeight), BLOOM_BASE, 0.5, 0.85);
-composer.addPass(bloomPass);
+// UnrealBloomPass is five downsample + five upsample full-screen passes. It is
+// by far the most expensive thing on the frame, so it only exists above LOW.
+let bloomPass = null;
+function setBloom(on) {
+  if (on && !bloomPass) {
+    bloomPass = new UnrealBloomPass(
+      new THREE.Vector2(innerWidth, innerHeight), BLOOM_BASE, 0.5, 0.85);
+    composer.insertPass(bloomPass, 1);
+  } else if (!on && bloomPass) {
+    composer.removePass(bloomPass);
+    bloomPass.dispose();
+    bloomPass = null;
+  }
+}
+setBloom(TIER.bloom);
 const gradePass = new ShaderPass(FinalGrade);
+gradePass.uniforms.uGrain.value = TIER.grain;
 composer.addPass(gradePass);
 composer.addPass(new OutputPass());
+
+// ---------- resolution ----------
+// One knob drives every render target: the tier's pixel-ratio ceiling times
+// the adaptive scale. Dropping this is the cheapest frame rate you can buy,
+// because the whole pipeline is fragment-bound.
+function applyResolution() {
+  const pr = Math.max(0.4, Math.min(devicePixelRatio, TIER.maxPR) * perf.scale);
+  renderer.setPixelRatio(pr);
+  composer.setPixelRatio(pr);   // resizes every pass, bloom's mip chain included
+}
 
 function resize() {
   camera.aspect = innerWidth / innerHeight;
   camera.updateProjectionMatrix();
   renderer.setSize(innerWidth, innerHeight);
   composer.setSize(innerWidth, innerHeight);
-  bloomPass.setSize(innerWidth, innerHeight);
+  applyResolution();
 }
 addEventListener('resize', resize);
+
+// ---------- texture budget ----------
+// The downloaded models ship 2K PBR sets. Decoded, a single 2048² map is 16 MB
+// of RAM before mipmaps — the bear alone is 20 MB, the DSLR another 110 MB
+// across seven maps. That is what actually kills an 8 GB laptop, so on the
+// lower tiers every loaded map gets resampled down to the tier's ceiling and
+// the original decoded bitmap is released.
+const ANISO = Math.min(TIER.aniso, renderer.capabilities.getMaxAnisotropy());
+const TEX_SLOTS = ['map', 'normalMap', 'roughnessMap', 'metalnessMap', 'aoMap',
+  'emissiveMap', 'alphaMap', 'bumpMap', 'displacementMap', 'specularMap', 'lightMap'];
+const tunedTextures = new WeakSet();
+
+function tuneTexture(tex) {
+  if (!tex || !tex.isTexture || tex.isCompressedTexture || tunedTextures.has(tex)) return;
+  tunedTextures.add(tex);
+  tex.anisotropy = ANISO;
+  const img = tex.image;
+  const ok = img && (img instanceof HTMLImageElement || img instanceof HTMLCanvasElement ||
+    (typeof ImageBitmap !== 'undefined' && img instanceof ImageBitmap));
+  if (!ok) { tex.needsUpdate = true; return; }
+  const w = img.width, h = img.height;
+  if (!w || !h || Math.max(w, h) <= TIER.texMax) { tex.needsUpdate = true; return; }
+  const k = TIER.texMax / Math.max(w, h);
+  const c = document.createElement('canvas');
+  c.width = Math.max(1, Math.round(w * k));
+  c.height = Math.max(1, Math.round(h * k));
+  const ctx = c.getContext('2d');
+  ctx.imageSmoothingEnabled = true;
+  ctx.imageSmoothingQuality = 'high';
+  ctx.drawImage(img, 0, 0, c.width, c.height);
+  tex.image = c;
+  tex.needsUpdate = true;
+  if (img.close) img.close();          // hand the decoded bitmap back to the GC
+}
+
+// Run over anything that just came out of GLTFLoader: shrink its maps, and drop
+// shadow casting entirely when the tier has shadows off (it doubles draw calls).
+function tuneModel(root) {
+  const seen = new Set();
+  root.traverse(o => {
+    if (!o.isMesh && !o.isSkinnedMesh) return;
+    if (!TIER.shadows) { o.castShadow = false; o.receiveShadow = false; }
+    for (const m of (Array.isArray(o.material) ? o.material : [o.material])) {
+      if (!m || seen.has(m)) continue;
+      seen.add(m);
+      for (const slot of TEX_SLOTS) tuneTexture(m[slot]);
+    }
+  });
+  return root;
+}
+
+// One loader for the whole game, and every model goes through here so nothing
+// slips past the texture budget.
+const modelLoader = new GLTFLoader();
+function loadModel(url, onLoad, onError) {
+  modelLoader.load(url, g => { tuneModel(g.scene); onLoad(g); },
+    undefined, onError || (e => console.warn('model failed:', url, e)));
+}
+
+// Free a mesh we are never going to draw, along with the maps only it referenced.
+function discardMesh(mesh) {
+  const mats = Array.isArray(mesh.material) ? mesh.material : [mesh.material];
+  for (const m of mats) {
+    if (!m) continue;
+    for (const slot of TEX_SLOTS) if (m[slot] && m[slot].isTexture) m[slot].dispose();
+    m.dispose();
+  }
+  if (mesh.geometry) mesh.geometry.dispose();
+  mesh.removeFromParent();
+}
 
 // ---------- room dimensions (meters, from floor plan 1m scale bar) ----------
 const ROOM = { minX: -6, maxX: 6, minZ: -9, maxZ: 9, wallH: 3.05, ridgeH: 4.7 };
@@ -218,7 +385,7 @@ function pineTexture(light = 1.0, boards = 10, size = 1024) {
   const t = new THREE.CanvasTexture(c);
   t.wrapS = t.wrapT = THREE.RepeatWrapping;
   t.colorSpace = THREE.SRGBColorSpace;
-  t.anisotropy = 8;
+  t.anisotropy = ANISO;
   return t;
 }
 
@@ -255,7 +422,7 @@ function floorTexture(size = 1024) {
   const t = new THREE.CanvasTexture(c);
   t.wrapS = t.wrapT = THREE.RepeatWrapping;
   t.colorSpace = THREE.SRGBColorSpace;
-  t.anisotropy = 8;
+  t.anisotropy = ANISO;
   return t;
 }
 // (floor planks ~0.33m wide when repeated 3x over the 12m width)
@@ -347,7 +514,7 @@ function rugTexture() {
   }
   const t = new THREE.CanvasTexture(c);
   t.colorSpace = THREE.SRGBColorSpace;
-  t.anisotropy = 8;
+  t.anisotropy = ANISO;
   return t;
 }
 
@@ -485,7 +652,7 @@ function desktopTexture() {
   });
   const t = new THREE.CanvasTexture(c);
   t.colorSpace = THREE.SRGBColorSpace;
-  t.anisotropy = 4;
+  t.anisotropy = ANISO;
   desktopTex = t;
   return t;
 }
@@ -1192,20 +1359,26 @@ coffeeTable(-3.3, 6.0);
 
 // ---- the east TV plays a looping clip ----
 // Autoplay only works muted, and on some browsers only after the first user
-// gesture, so the start click gives it a nudge too.
-const tvVideo = document.createElement('video');
-tvVideo.src = './video/loopvideo.mp4';
-tvVideo.loop = true;
-tvVideo.muted = true;
-tvVideo.playsInline = true;
-tvVideo.autoplay = true;
-tvVideo.crossOrigin = 'anonymous';
-tvVideo.play().catch(() => {});
-const tvTexture = new THREE.VideoTexture(tvVideo);
-tvTexture.colorSpace = THREE.SRGBColorSpace;
-tvTexture.minFilter = THREE.LinearFilter;
-tvTexture.magFilter = THREE.LinearFilter;
-const matScreenVideo = new THREE.MeshBasicMaterial({ map: tvTexture, toneMapped: false });
+// gesture, so the start click gives it a nudge too. On LOW the clip is skipped
+// altogether: decoding it and re-uploading a fresh frame to the GPU every tick
+// costs more than a small screen in the corner is worth.
+let tvVideo = null, tvTexture = null;
+let matScreenVideo = matScreenOff;
+if (TIER.video) {
+  tvVideo = document.createElement('video');
+  tvVideo.src = './video/loopvideo.mp4';
+  tvVideo.loop = true;
+  tvVideo.muted = true;
+  tvVideo.playsInline = true;
+  tvVideo.autoplay = true;
+  tvVideo.crossOrigin = 'anonymous';
+  tvVideo.play().catch(() => {});
+  tvTexture = new THREE.VideoTexture(tvVideo);
+  tvTexture.colorSpace = THREE.SRGBColorSpace;
+  tvTexture.minFilter = THREE.LinearFilter;
+  tvTexture.magFilter = THREE.LinearFilter;
+  matScreenVideo = new THREE.MeshBasicMaterial({ map: tvTexture, toneMapped: false });
+}
 
 // wall TVs
 function wallTV(x, y, z, ry, w = 1.7, h = 0.95, mat = matScreenOff) {
@@ -1455,7 +1628,7 @@ buildSponge(-2.9, 10.9);
   ];
   const tryLoad = i => {
     if (i >= CANDIDATES.length) return;
-    new GLTFLoader().load(CANDIDATES[i], gltf => {
+    loadModel(CANDIDATES[i], gltf => {
       const m = gltf.scene;
       const bb = new THREE.Box3().setFromObject(m);
       const size = bb.getSize(new THREE.Vector3());
@@ -1679,7 +1852,7 @@ function revealMirror() {
     const t = new THREE.CanvasTexture(c);
     t.wrapS = t.wrapT = THREE.RepeatWrapping;
     t.colorSpace = THREE.SRGBColorSpace;
-    t.anisotropy = 8;
+    t.anisotropy = ANISO;
     return t;
   }
   const rbTex = rainbowPine();
@@ -1853,7 +2026,7 @@ function revealMirror() {
   }
 
   // real golf cart parked by the road ("area 9 golf cart" by maxdragonn, CC-BY)
-  new GLTFLoader().load('./models/golfcart/scene.gltf', g => {
+  loadModel('./models/golfcart/scene.gltf', g => {
     const cart = g.scene;
     cart.updateMatrixWorld(true);
     const bb = new THREE.Box3();
@@ -1890,8 +2063,8 @@ scene.add(hemi);
 // key sun through the west garage doors — long warm rake across the floor
 const sun = new THREE.DirectionalLight(0xfff0d4, 2.0);
 sun.position.set(-22, 16, 6);
-sun.castShadow = true;
-sun.shadow.mapSize.set(2048, 2048);
+sun.castShadow = TIER.shadows;
+sun.shadow.mapSize.set(TIER.shadowSize, TIER.shadowSize);
 sun.shadow.camera.left = -16; sun.shadow.camera.right = 16;
 sun.shadow.camera.top = 16; sun.shadow.camera.bottom = -16;
 sun.shadow.camera.near = 1; sun.shadow.camera.far = 60;
@@ -1905,18 +2078,29 @@ const coolFill = new THREE.DirectionalLight(0xb8d8f0, 0.5);
 coolFill.position.set(18, 8, -4);
 scene.add(coolFill);
 
-// warm pools directly under each recessed can
+// Warm pools directly under each recessed can. Every one of these is evaluated
+// per fragment for every lit surface on screen, so the count is the single
+// biggest shading cost in the room — the tier decides how many actually burn,
+// and the ones that stay get brighter and reach further to cover the gaps.
+const CAN_SPOTS = [];
+for (const x of [-3.6, 3.6]) for (const z of [-7, -3.5, 0, 3.5, 7]) CAN_SPOTS.push([x, z]);
+// picked so a reduced set still spreads across the whole hall instead of
+// clustering at one end
+const CAN_ORDER = [2, 7, 0, 9, 4, 5, 1, 6, 3, 8];
 const warm = [];
-for (const x of [-3.6, 3.6]) {
-  for (const z of [-7, -3.5, 0, 3.5, 7]) {
-    const p = new THREE.PointLight(0xffcf96, 3.4, 6.5, 2.0);
-    p.position.set(x, 2.72, z);
-    scene.add(p);
-    warm.push(p);
-  }
+for (let i = 0; i < TIER.warmCans; i++) {
+  const [x, z] = CAN_SPOTS[CAN_ORDER[i]];
+  const spread = 10 / Math.max(1, TIER.warmCans);
+  const p = new THREE.PointLight(0xffcf96, 3.4 * Math.min(2, 0.55 + spread * 0.45),
+    6.5 * Math.min(1.8, 0.75 + spread * 0.25), 2.0);
+  p.position.set(x, 2.72, z);
+  scene.add(p);
+  warm.push(p);
 }
-// soft ambient lift so the room never crushes to black
-const roomFill = new THREE.PointLight(0xffe3c0, 3.2, 24, 1.2);
+// soft ambient lift so the room never crushes to black — carries more of the
+// load when the cans have been thinned out
+const roomFill = new THREE.PointLight(0xffe3c0, 3.2 * TIER.lightBoost,
+  24 * (TIER.warmCans ? 1 : 1.3), 1.2);
 roomFill.position.set(0, 2.5, 0);
 scene.add(roomFill);
 
@@ -1931,7 +2115,7 @@ scene.traverse(o => {
 
 // ---------- atmosphere: dust motes + light shafts through the doors ----------
 let dust = null;
-{
+if (TIER.dust > 0) {
   const [dc, dctx] = makeCanvas(64, 64);
   const dg = dctx.createRadialGradient(32, 32, 0, 32, 32, 32);
   dg.addColorStop(0, 'rgba(255,245,225,1)');
@@ -1940,7 +2124,7 @@ let dust = null;
   dctx.fillStyle = dg; dctx.fillRect(0, 0, 64, 64);
   const dustTex = new THREE.CanvasTexture(dc);
 
-  const N = 700;
+  const N = TIER.dust;   // every mote is repositioned in JS every frame
   const pos = new Float32Array(N * 3);
   const seed = new Float32Array(N);
   for (let i = 0; i < N; i++) {
@@ -2028,7 +2212,7 @@ const wx = {
 const _cA = new THREE.Color(), _cB = new THREE.Color();
 
 // ---------- precipitation: one buffer, re-skinned per weather ----------
-const FALL_N = 2200;
+const FALL_N = TIER.fall;   // precipitation is integrated on the CPU every frame
 const FALL_R = 24;                               // the field follows the player
 const fallP = new Float32Array(FALL_N * 3);      // head position
 const fallV = new Float32Array(FALL_N * 3);      // velocity
@@ -2227,11 +2411,13 @@ function applyWeather() {
   scene.background = _cB.copy(wx.sky).lerp(_cA.setHex(0x9fb6d4), fl * 0.7);
   scene.fog.color.copy(wx.fog).lerp(_cA.setHex(0xbcccdf), fl * 0.55);
   scene.fog.near = mix(f.fogNear, p.fogNear);
-  scene.fog.far = mix(f.fogFar, p.fogFar);
+  // a nearer fog wall on LOW quietly hides more of the outdoor scenery
+  scene.fog.far = mix(f.fogFar, p.fogFar) * TIER.fogFarMul;
   renderer.toneMappingExposure = mix(f.exposure, p.exposure) * (1 + fl * 0.3);
 
   hemi.color.copy(wx.hemiSky); hemi.groundColor.copy(wx.hemiGnd);
-  hemi.intensity = mix(f.hemiInt, p.hemiInt) + fl * 1.9;
+  // the hemisphere picks up the slack for the recessed cans we turned off
+  hemi.intensity = (mix(f.hemiInt, p.hemiInt) + fl * 1.9) * TIER.lightBoost;
   sun.color.copy(wx.sunCol);
   sun.intensity = mix(f.sunInt, p.sunInt) + fl * 3.2;
   coolFill.color.copy(wx.fillCol);
@@ -2376,14 +2562,19 @@ addEventListener('mousemove', e => {
 const weapon = new THREE.Group();
 {
   // photoreal SLR: "Camera 01" from Poly Haven (CC0), PBR textures
-  new GLTFLoader().load('./models/camera/Camera_01.gltf', g => {
+  loadModel('./models/camera/Camera_01.gltf', g => {
     const cam = g.scene;
+    // The strap is hidden, but GLTFLoader still decoded its three 2K maps —
+    // ~48 MB of RAM for geometry that never draws. Throw the whole thing out.
+    const strap = [];
     cam.traverse(o => {
       if (o.isMesh) {
         o.castShadow = false;
-        if (/strap/i.test(o.name) || (o.material && /strap/i.test(o.material.name || ''))) o.visible = false;
+        if (/strap/i.test(o.name) || (o.material && /strap/i.test(o.material.name || ''))) strap.push(o);
       }
     });
+    for (const s of strap) discardMesh(s);
+    tuneModel(cam);
     const box = new THREE.Box3().setFromObject(cam);
     const center = box.getCenter(new THREE.Vector3());
     const size = box.getSize(new THREE.Vector3());
@@ -2504,11 +2695,10 @@ function sfxRound() {
 // ============================================================
 // ENEMIES
 // ============================================================
-const loader = new GLTFLoader();
 let robotGltf = null;
 const enemies = [];
 
-loader.load('./models/RobotExpressive.glb', g => { robotGltf = g; });
+loadModel('./models/RobotExpressive.glb', g => { robotGltf = g; });
 
 const TIER_COLORS = [null, 0xffffff, 0xffa54d, 0xff5544];  // 1..3
 
@@ -2656,7 +2846,7 @@ function spawnFaceEnemy(doorDef, tier, boss = false) {
 }
 // ---------- Patrick: a proper animated brawler ----------
 let patrickGltf = null;
-new GLTFLoader().load('./models/patrick/scene.gltf', g => {
+loadModel('./models/patrick/scene.gltf', g => {
   patrickGltf = g;
   console.log('Patrick loaded —', g.animations.length, 'clips');
 });
@@ -3320,7 +3510,7 @@ function buildRacket() {
 // ---------- SD card shuriken ----------
 let sdcardProto = null;
 const sdcards = [];
-new GLTFLoader().load('./models/sdcard/scene.gltf', g => {
+loadModel('./models/sdcard/scene.gltf', g => {
   const m = g.scene;
   m.updateMatrixWorld(true);
   const bb = new THREE.Box3();
@@ -4562,18 +4752,21 @@ function sfxPortal() {
 let bearGltf = null, bear = null, bearCooldown = 28;
 // the model ships KHR_materials_pbrSpecularGlossiness, which three r160 dropped,
 // so its maps never bind — load them by hand and rebuild the material.
+// The 2K diffuse is 16 MB decoded, so it goes through the same budget as the
+// GLTF maps — tuneTexture only has an image to resample once the load lands.
 const bearTexLoader = new THREE.TextureLoader();
-const bearDiffuse = bearTexLoader.load('./models/bear/textures/Bear_diffuse.png');
+const bearDiffuse = bearTexLoader.load('./models/bear/textures/Bear_diffuse.png',
+  t => tuneTexture(t));
 bearDiffuse.colorSpace = THREE.SRGBColorSpace;
 bearDiffuse.flipY = false;
-bearDiffuse.anisotropy = 8;
-const bearNormalMap = bearTexLoader.load('./models/bear/textures/Bear_normal.png');
+const bearNormalMap = bearTexLoader.load('./models/bear/textures/Bear_normal.png',
+  t => tuneTexture(t));
 bearNormalMap.flipY = false;
 const bearMat = new THREE.MeshStandardMaterial({
   map: bearDiffuse, normalMap: bearNormalMap, roughness: 0.92, metalness: 0,
 });
 
-new GLTFLoader().load('./models/bear/scene.gltf', g => {
+loadModel('./models/bear/scene.gltf', g => {
   bearGltf = g;
   console.log('Bear loaded —', g.animations.length, 'clips');
 });
@@ -4716,7 +4909,7 @@ function bearMaul() {
 // "NAME THAT ALIEN" — random dancing-alien quiz break
 // ============================================================
 let alienGltf = null, alienQuiz = null, alienCooldown = 40;
-new GLTFLoader().load('./models/alien/scene.gltf', g => {
+loadModel('./models/alien/scene.gltf', g => {
   alienGltf = g;
   console.log('Alien loaded —', g.animations.length, 'clips');
 });
@@ -4940,7 +5133,7 @@ function startGame() {
   canvas.requestPointerLock();
   audio();
   decodeSfx();                      // the click is the gesture audio was waiting on
-  tvVideo.play().catch(() => {});
+  if (tvVideo) tvVideo.play().catch(() => {});
   game.state = 'intermission';
   game.round = 0;
   game.flashShots = FLASH_MAG;
@@ -5028,6 +5221,27 @@ function gameOver() {
 
 startOverlay.addEventListener('click', startGame);
 gameoverOverlay.addEventListener('click', () => location.reload());
+
+// ---------- graphics picker on the menu ----------
+{
+  const row = document.getElementById('qualityRow');
+  const hint = document.getElementById('qHint');
+  if (row) {
+    // the whole overlay is click-to-start, so swallow clicks that land in here
+    row.addEventListener('click', e => {
+      e.stopPropagation();
+      const b = e.target.closest('.qBtn');
+      if (b) setQuality(b.dataset.q);
+    });
+    for (const b of row.querySelectorAll('.qBtn')) b.classList.toggle('on', b.dataset.q === perf.name);
+    if (hint) {
+      hint.addEventListener('click', e => e.stopPropagation());
+      hint.textContent = perf.pinned
+        ? 'Saved on this computer · press [ or ] in game to change · F3 for FPS'
+        : `Auto-detected as ${TIER.label} · drop to LOW if it stutters · F3 for FPS`;
+    }
+  }
+}
 
 // tier for current round
 function pickTier() {
@@ -5395,9 +5609,143 @@ function sfxExplode()  { playSfx('explode', 0.6, rnd(0.9, 1.1)); }
 function sfxShield()   { playSfx('shield', 0.55); }
 function sfxReload()   { playSfx('reload', 0.4); }
 
+// ============================================================
+// ADAPTIVE PERFORMANCE
+// ============================================================
+// Nothing here needs the player to know what a pixel ratio is. The renderer
+// watches its own frame time and walks the resolution down until the frame
+// rate is back where it belongs, then carefully walks it back up. If it bottoms
+// out and is still struggling, it starts switching effects off one at a time.
+const TARGET_MS = 1000 / 58;    // above this we are leaving frames on the table
+const PANIC_MS = 1000 / 45;     // below 45 fps it genuinely feels bad
+
+const perfEl = document.getElementById('perfStats');
+let relief = 0;                 // how many effects we have already sacrificed
+
+function shedLoad() {
+  relief++;
+  if (relief === 1 && bloomPass) {
+    setBloom(false);
+    showToast('PERFORMANCE — BLOOM OFF');
+  } else if (relief <= 2 && renderer.shadowMap.enabled) {
+    renderer.shadowMap.enabled = false;
+    sun.castShadow = false;
+    scene.traverse(o => { if (o.isMesh && o.material) refreshMat(o.material); });
+    showToast('PERFORMANCE — SHADOWS OFF');
+  } else if (relief <= 3 && dust && dust.visible) {
+    dust.visible = false;
+    scene.fog.far *= 0.7;
+    showToast('PERFORMANCE — EFFECTS REDUCED');
+  } else if (relief === 4 && perf.name !== 'low') {
+    showToast('STILL CHOPPY? PRESS  [  FOR LOW QUALITY', 4500);
+  } else {
+    relief = 99;                // out of things to give up; stop nagging
+  }
+}
+
+// changing shadowMap.enabled or its type invalidates every compiled program
+function refreshMat(mat) {
+  for (const m of (Array.isArray(mat) ? mat : [mat])) if (m) m.needsUpdate = true;
+}
+
+function samplePerf(msRaw) {
+  perf.acc += msRaw;
+  perf.accFrames++;
+  if (perf.accFrames < 20) return;
+  const avg = perf.acc / perf.accFrames;
+  perf.acc = 0; perf.accFrames = 0;
+  perf.ms += (avg - perf.ms) * 0.5;          // smooth so one hitch cannot swing it
+  perf.fps = 1000 / perf.ms;
+  if (perf.cooldown > 0) { perf.cooldown--; return; }
+
+  if (perf.ms > PANIC_MS) {
+    if (perf.scale > TIER.minScale + 0.001) {
+      perf.scale = Math.max(TIER.minScale, perf.scale - 0.1);
+      applyResolution();
+      perf.cooldown = 3;
+    } else if (relief < 99) {
+      perf.starved++;
+      if (perf.starved >= 4) { perf.starved = 0; shedLoad(); perf.cooldown = 25; }
+    }
+  } else if (perf.ms < TARGET_MS && perf.scale < 1) {
+    // plenty of headroom — creep back toward full resolution
+    perf.scale = Math.min(1, perf.scale + 0.05);
+    applyResolution();
+    perf.cooldown = 8;
+    perf.starved = 0;
+  } else {
+    perf.starved = 0;
+  }
+}
+
+// [ and ] step quality down / up. The tier decides how the whole scene is
+// built, so it takes effect on reload rather than trying to rebuild live.
+function setQuality(name) {
+  if (!TIERS[name] || name === perf.name) return;
+  try { localStorage.setItem('dd_quality', name); } catch (e) { /* private mode */ }
+  location.reload();
+}
+let qArmed = 0;
+addEventListener('keydown', e => {
+  if (e.code === 'F3' || (e.code === 'KeyP' && e.shiftKey)) {
+    perf.showStats = !perf.showStats;
+    if (perfEl) perfEl.style.display = perf.showStats ? 'block' : 'none';
+    return;
+  }
+  const dir = e.code === 'BracketLeft' ? -1 : e.code === 'BracketRight' ? 1 : 0;
+  if (!dir) return;
+  const next = TIER_ORDER[TIER_ORDER.indexOf(perf.name) + dir];
+  if (!next) return;
+  // switching rebuilds the scene, so mid-run it costs you the round — make the
+  // player say it twice
+  const mid = game.state === 'wave' || game.state === 'intermission';
+  if (mid && Date.now() - qArmed > 3000) {
+    qArmed = Date.now();
+    showToast(`PRESS AGAIN FOR ${TIERS[next].label} — RESTARTS THE RUN`, 3000);
+    return;
+  }
+  setQuality(next);
+});
+// console handles, for poking at this on the machine that is actually struggling
+window.digiPerf = {
+  setQuality, shed: shedLoad, tiers: TIERS,
+  get state() { return { tier: perf.name, scale: perf.scale, fps: perf.fps, relief }; },
+};
+
+// last values pushed to the HUD, so we only touch the DOM on a real change
+const hudLast = { crit: null, hp: -1, shots: -2, left: -1 };
+
 const clock = new THREE.Clock();
+let frameMark = performance.now();
+let hiddenSkip = 0;
 function tick() {
   requestAnimationFrame(tick);
+
+  // A backgrounded tab does not need a full frame of physics and shading.
+  // Browsers already throttle rAF here; this drops most of what is left. It
+  // trickles rather than stopping dead, so a host that mis-reports visibility
+  // gets a slow game instead of a black canvas.
+  if (document.hidden && ++hiddenSkip % 6) { clock.getDelta(); return; }
+
+  const nowMs = performance.now();
+  samplePerf(nowMs - frameMark);
+  frameMark = nowMs;
+  perf.frame++;
+  // shadows are expensive enough to be worth re-rendering on a cadence
+  if (renderer.shadowMap.enabled && perf.frame % TIER.shadowEvery === 0) {
+    renderer.shadowMap.needsUpdate = true;
+  }
+  const info = renderer.info.render;
+  if (perf.showStats && perfEl && perf.frame % 15 === 0) {
+    perfEl.textContent =
+      `${perf.fps.toFixed(0)} FPS · ${perf.ms.toFixed(1)} ms\n` +
+      `${TIER.label} · scale ${perf.scale.toFixed(2)} · ${(Math.min(devicePixelRatio, TIER.maxPR) * perf.scale).toFixed(2)}x\n` +
+      `${info.calls} draws · ${(info.triangles / 1000).toFixed(0)}k tris\n` +
+      `bloom ${bloomPass ? 'on' : 'off'} · shadows ${renderer.shadowMap.enabled ? 'on' : 'off'}\n` +
+      `[ / ] quality · F3 hide`;
+  }
+  renderer.info.reset();   // counters above describe the frame we just finished
+
   const dt = Math.min(clock.getDelta(), 0.05);
 
   const now = clock.elapsedTime;
@@ -5483,7 +5831,9 @@ function tick() {
   gradePass.uniforms.uFlash.value = Math.max(0, flashDecay) * 0.28;
   gradePass.uniforms.uSprint.value = player.sprint;
   gradePass.uniforms.uDamage.value = Math.max(0, gradePass.uniforms.uDamage.value - dt * 2.2);
-  bloomPass.strength = BLOOM_BASE + Math.max(0, flashDecay) * 0.9 + (game.upgraded ? 0.12 : 0);
+  if (bloomPass) {
+    bloomPass.strength = BLOOM_BASE + Math.max(0, flashDecay) * 0.9 + (game.upgraded ? 0.12 : 0);
+  }
 
   // garage door animation
   let anyMoving = false;
@@ -5783,28 +6133,47 @@ function tick() {
       if (game.interT <= 0) startWave();
     }
 
-    // HUD — critical health pulses the bar and the screen edges
+    // HUD — critical health pulses the bar and the screen edges.
+    // Writing these every frame forces a style recalc on top of the render, so
+    // the bars only move when the number behind them actually changed.
     const crit = player.alive && player.hp > 0 && player.hp <= 30;
-    critFx.classList.toggle('on', crit);
-    critFx.style.opacity = crit ? '' : '0';
-    hpBar.classList.toggle('crit', crit);
-    hpLabelEl.classList.toggle('crit', crit);
-    hpBar.style.width = player.hp + '%';
+    if (crit !== hudLast.crit) {
+      hudLast.crit = crit;
+      critFx.classList.toggle('on', crit);
+      critFx.style.opacity = crit ? '' : '0';
+      hpBar.classList.toggle('crit', crit);
+      hpLabelEl.classList.toggle('crit', crit);
+    }
+    if (player.hp !== hudLast.hp) {
+      hudLast.hp = player.hp;
+      hpBar.style.width = player.hp + '%';
+    }
     // loaded: the bar shows frames left. empty: it shows the reload winding up.
     if (game.flashShots > 0) {
       chargeBar.style.width = (game.flashShots / FLASH_MAG * 100) + '%';
-      chargeBar.style.background = 'linear-gradient(90deg,#7CFC00,#efe)';
-      flashPips.textContent = '●'.repeat(game.flashShots) + '○'.repeat(FLASH_MAG - game.flashShots);
-      flashPips.style.color = '#bfff6a';
+      if (hudLast.shots !== game.flashShots) {
+        hudLast.shots = game.flashShots;
+        chargeBar.style.background = 'linear-gradient(90deg,#7CFC00,#efe)';
+        flashPips.textContent = '●'.repeat(game.flashShots) + '○'.repeat(FLASH_MAG - game.flashShots);
+        flashPips.style.color = '#bfff6a';
+      }
     } else {
       chargeBar.style.width = (game.charge * 100) + '%';
-      chargeBar.style.background = 'linear-gradient(90deg,#c8791b,#ffd24d)';
-      flashPips.textContent = 'RELOADING';
-      flashPips.style.color = '#ffd24d';
+      if (hudLast.shots !== -1) {
+        hudLast.shots = -1;
+        chargeBar.style.background = 'linear-gradient(90deg,#c8791b,#ffd24d)';
+        flashPips.textContent = 'RELOADING';
+        flashPips.style.color = '#ffd24d';
+      }
     }
     refreshScore();
     // the round badge carries the round now, so this only tracks the wave
-    statsEl.innerHTML = `ENEMIES LEFT ${enemies.filter(e => e.state !== 'dying').length + game.spawnQueue}`;
+    let left = game.spawnQueue;
+    for (const e of enemies) if (e.state !== 'dying') left++;
+    if (left !== hudLast.left) {
+      hudLast.left = left;
+      statsEl.textContent = `ENEMIES LEFT ${left}`;
+    }
   }
 
   composer.render();

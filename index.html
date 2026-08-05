@@ -65,6 +65,26 @@
         border-bottom-width:2px; border-radius:5px; padding:3px 8px; min-width:26px; display:inline-block;
         text-align:center; box-shadow:0 1px 0 rgba(255,255,255,.06) inset; }
 
+  /* ---------- quality picker ---------- */
+  .qualityRow { margin-top:30px; display:flex; align-items:center; gap:10px; cursor:default; }
+  .qualityRow .qLabel { font-family:var(--ui); font-size:12px; letter-spacing:.18em;
+                        text-transform:uppercase; color:#8e9c87; margin-right:4px; }
+  .qBtn { font-family:var(--mono); font-size:12px; font-weight:700; letter-spacing:.12em;
+          color:#c9d6c2; background:linear-gradient(180deg,#2c332a,#1b201a);
+          border:1px solid #4a5544; border-bottom-width:2px; border-radius:5px;
+          padding:6px 14px; cursor:pointer; transition:all .15s; }
+  .qBtn:hover { color:#eafce0; border-color:#6f8065; }
+  .qBtn.on { color:#0d1408; background:linear-gradient(180deg,#c6ff5c,#7fd10a);
+             border-color:#7fd10a; box-shadow:0 0 16px rgba(168,255,62,.35); }
+  .qHint { margin-top:9px; font-family:var(--ui); font-size:11px; letter-spacing:.1em;
+           color:#6d7a67; cursor:default; }
+
+  /* ---------- perf readout (F3) ---------- */
+  #perfStats { position:fixed; top:10px; left:12px; z-index:60; display:none;
+               font-family:var(--mono); font-size:11px; line-height:1.5; white-space:pre;
+               color:#bff; background:rgba(0,0,0,.55); border:1px solid rgba(160,255,220,.25);
+               border-radius:4px; padding:7px 10px; pointer-events:none; }
+
   #startOverlay .go {
     margin-top:40px; font-family:var(--display); font-size:26px; letter-spacing:.28em;
     color:#0d1408; background:linear-gradient(180deg,#c6ff5c,#7fd10a);
@@ -396,6 +416,14 @@
       <div class="keyRow"><div class="ks"><kbd>Esc</kbd></div><span class="lbl">Release Cursor</span></div>
     </div>
 
+    <div class="qualityRow" id="qualityRow">
+      <span class="qLabel">Graphics</span>
+      <button class="qBtn" type="button" data-q="low">LOW</button>
+      <button class="qBtn" type="button" data-q="medium">MEDIUM</button>
+      <button class="qBtn" type="button" data-q="high">HIGH</button>
+    </div>
+    <div class="qHint" id="qHint">Auto-detected. Drop to LOW if the frame rate stutters &middot; F3 for FPS</div>
+
     <div class="go">CLICK TO START</div>
   </div>
   <div class="credits">Built with three.js (MIT) &middot; "Camera 01" by Poly Haven (CC0) &middot;
@@ -405,6 +433,8 @@
     "Dancing Alien" by nthmn.exe (CC-BY-NC-SA-4.0) &middot;
     "SanDisk SD Card" by Kiran Kumar (CC-BY-4.0)</div>
 </div>
+
+<div id="perfStats"></div>
 
 <div class="overlay" id="gameoverOverlay">
   <h1>You died</h1>
