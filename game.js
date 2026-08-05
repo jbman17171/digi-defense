@@ -816,7 +816,15 @@ const EAST_WINS = [-7.2, -5.4, -3.6, 2.6, 4.4, 6.2, 8.0]
 const EAST_DOOR = { z0: -0.8, z1: 1.1, y0: 0, y1: 2.1 };
 // the rear (east) French doors swing open to let bosses in
 const rearDoors = [];
-let rearOpen = 0, rearTarget = 0;
+let rearOpen = 0, rearTarget = 0, rearWasOpen = false;
+// They swing for you as you walk up to them and shut again once you're clear.
+// The catchment reaches well back into the room and out onto the porch so they
+// are already standing open by the time you get there, from either side.
+function playerAtRearDoors() {
+  const p = player.pos;
+  return p.x > 4.2 && p.x < 7.4 &&
+         p.z > EAST_DOOR.z0 - 0.7 && p.z < EAST_DOOR.z1 + 0.7;
+}
 // the staff-room door SpongeBob bursts out of on round 4
 let staffDoor = null, staffTarget = 0;
 // both back-room doors: three hits to smash open, then the room is yours
@@ -5951,8 +5959,15 @@ function tick() {
   }
   if (!anyMoving) sfxDoorStop();
 
-  // rear French doors swing for the boss
-  rearOpen += (rearTarget - rearOpen) * Math.min(1, dt * 2.2);
+  // rear French doors: forced open for the boss, and opened by you walking up
+  const rearWant = Math.max(rearTarget, playerAtRearDoors() ? 1 : 0);
+  if ((rearWant > 0.5) !== rearWasOpen) {
+    rearWasOpen = rearWant > 0.5;
+    playSfx(rearWasOpen ? 'doorOpen' : 'doorClose', rearWasOpen ? 0.4 : 0.32);
+  }
+  // quicker to open than to close, so you never walk into a door that hasn't
+  // got out of the way yet
+  rearOpen += (rearWant - rearOpen) * Math.min(1, dt * (rearWant > rearOpen ? 5 : 2.4));
   for (const d of rearDoors) d.pivot.rotation.y = -d.s * rearOpen * Math.PI * 0.62;
 
   // back-room doors: the staff one also swings in on cue for SpongeBob, and a
