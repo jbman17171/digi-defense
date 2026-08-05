@@ -2805,6 +2805,9 @@ const weapon = new THREE.Group();
     holder.scale.setScalar(0.3 / Math.max(size.x, size.y, size.z));
     holder.rotation.y = Math.PI;   // model lens runs +z; flip so it aims downrange
     holder.name = 'camHolder';
+    // the gltf lands well after the first selectWeapon, so it has to check for
+    // itself whether the camera is the thing currently in your hands
+    holder.visible = WEAPONS[curWeapon] && WEAPONS[curWeapon].id === 'camera';
     weapon.add(holder);
   });
   // flash burst quad — only visible for the instant the flash fires
@@ -3664,13 +3667,16 @@ const FLASH_MAG = 2;        // shots before the reload
 const FLASH_GAP = 0.18;     // beat between the two, so it reads as two pops
 const FLASH_RELOAD = 0.85;  // wind-up once both are gone
 const WEAPONS = [
+  { id: 'sdcard', name: 'SD CARD SHURIKEN', melee: false, cd: 0.22 },
   { id: 'camera', name: 'FLASH CAMERA', melee: false, cd: 0.55 },
   { id: 'sword', name: 'LARP FOAM SWORD', melee: true, cd: 0.42, reach: 2.6, arc: 0.85, dmg: 2 },
   { id: 'racket', name: 'TENNIS RACKET', melee: true, cd: 0.5, reach: 2.4, arc: 0.7, dmg: 1 },
-  { id: 'sdcard', name: 'SD CARD SHURIKEN', melee: false, cd: 0.22 },
   // unlocked from a mystery box — sits alongside the camera, doesn't replace it
   { id: 'camcorder', name: 'LASER CAMCORDER', melee: false, cd: 0.09, locked: true },
 ];
+// order in here drives the number keys and the wheel, so never look a weapon up
+// by a hardcoded index
+const weaponSlot = id => WEAPONS.findIndex(w => w.id === id);
 let curWeapon = 0;
 let swingT = 0;          // melee swing animation clock
 let attackCd = 0;
@@ -3881,7 +3887,7 @@ let wheelOpen = false, wheelPick = 0, wheelAngle = 0;
 
 {
   const N = WEAPONS.length, R0 = 52, R1 = 150, gap = 0.045;
-  const SHORT = ['CAMERA', 'SWORD', 'RACKET', 'SD CARDS', 'CAMCORDER'];
+  const SHORT = ['SD CARDS', 'CAMERA', 'SWORD', 'RACKET', 'CAMCORDER'];
   for (let i = 0; i < N; i++) {
     const a0 = (i / N) * Math.PI * 2 - Math.PI / 2 + gap;
     const a1 = ((i + 1) / N) * Math.PI * 2 - Math.PI / 2 - gap;
@@ -3964,8 +3970,9 @@ function closeWheel() {
     m.userData.rest = { pos: m.position.clone(), rot: m.rotation.clone() };
     weapon.add(m);
   }
-  wepNameEl.textContent = WEAPONS[0].name;
   refreshWheelLocks();
+  curWeapon = -1;              // force selectWeapon to actually do the swap
+  selectWeapon(0);
 }
 
 // ============================================================
@@ -4517,8 +4524,9 @@ function grantMysteryReward(key) {
       break;
 
     case 'arsenal':
+      // buffs whatever you're holding — switching your weapon out from under
+      // you mid-fight fought against the point of it
       game.arsenalT = 25;
-      selectWeapon(2);
       break;
 
     case 'shield':
@@ -4606,7 +4614,7 @@ function buildCamcorder() {
 }
 // unlock the camcorder as its own slot and equip it
 function upgradeWeapon() {
-  const slot = WEAPONS.findIndex(w => w.id === 'camcorder');
+  const slot = weaponSlot('camcorder');
   if (slot < 0) return;
   game.upgraded = true;
   WEAPONS[slot].locked = false;

@@ -1,7 +1,7 @@
 # DIGI DEFENSE — Camp Media Lab
 
-A browser FPS set in the Camp Media Lab. Fight off waves of enemies with a flash
-camera, a LARP foam sword, a tennis racket and a fistful of SD cards.
+A browser FPS set in the Camp Media Lab. Fight off waves of enemies with a
+fistful of SD cards, a flash camera, a LARP foam sword and a tennis racket.
 
 **Play it:** https://JBMAN17171.github.io/digi-defense/
 
