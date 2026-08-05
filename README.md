@@ -55,8 +55,8 @@ count. `window.digiPerf` in the console has the same numbers plus
   wandering bear, a caterpillar that sheds a segment per hit, and a SpongeBob.
 - **Mystery boxes** drop in mid-round. Flash or smash one open and the prize
   pops out Smash-Bros style — walk over it to use it, or leave it alone.
-  Rewards include a laser camcorder, an exposure bomb, a Premiere "Timeline
-  Runner" minigame, and a rare 1-UP mushroom.
+  Rewards include a laser camcorder, an exposure bomb, a shield potion, and a
+  rare 1-UP mushroom.
 - **Shootable computers.** Every iMac in the lab can be blown apart in one hit,
   and one random machine each round is hiding a shield potion.
 - **Breakable back rooms.** Three hits splinters a staff-room or gear-room

@@ -315,16 +315,6 @@
               opacity:0; pointer-events:none; }
   #aqResult.pop { animation:aqCorrect .55s cubic-bezier(.2,1.4,.4,1) forwards; }
   @keyframes aqCorrect { to { opacity:1; transform:translate(-50%,-50%) scale(1); } }
-
-  /* Premiere-style timeline runner minigame */
-  #mini { position:fixed; inset:0; z-index:70; display:none; flex-direction:column;
-          align-items:center; justify-content:center; background:rgba(4,5,8,0.94); }
-  #miniTitle { color:#c8a6ff; font-family:'Courier New',monospace; font-size:17px; letter-spacing:5px;
-               margin-bottom:10px; text-shadow:0 0 14px rgba(160,110,255,.6); }
-  #miniCanvas { width:min(94vw,1280px); height:auto; border:1px solid #2b2f3a;
-                box-shadow:0 18px 60px rgba(0,0,0,.8); background:#1e2129; }
-  #miniHint { color:#7f8794; font-family:'Courier New',monospace; font-size:13px; letter-spacing:2px;
-              margin-top:10px; }
 </style>
 </head>
 <body>
@@ -391,12 +381,6 @@
     <div class="rpDesc" id="rpDesc"></div>
   </div>
   <div class="rpBar"><i></i></div>
-</div>
-
-<div id="mini">
-  <div id="miniTitle">PREMIERE PRO — TIMELINE RUNNER</div>
-  <canvas id="miniCanvas" width="1280" height="620"></canvas>
-  <div id="miniHint">SPACE / CLICK to jump &nbsp;·&nbsp; survive the timeline &nbsp;·&nbsp; ESC to bail</div>
 </div>
 
 <div class="overlay" id="startOverlay">

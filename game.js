@@ -943,15 +943,28 @@ function openSideRoomAt(x, z) {
 
 // ---- entry double doors (west wall, between garage doors) ----
 {
+  // Half-lite commercial doors, like the real ones: a painted frame around one
+  // big pane. Built as separate rails and stiles rather than a slab with a
+  // glass sticker on it, so you genuinely see the driveway through the middle.
   const g = new THREE.Group();
+  const H = 2.1, W = 0.86, T = 0.08;      // leaf height, width (along z), thickness
+  const STILE = 0.1, RAIL_TOP = 0.12, RAIL_BOT = 0.28;
+  const LITE_H = H - RAIL_TOP - RAIL_BOT;
   for (const s of [-1, 1]) {
-    const door = new THREE.Mesh(new THREE.BoxGeometry(0.08, 2.1, 0.86), matWhite);
-    door.position.set(0, 1.05, s * 0.45);
-    door.castShadow = true;
-    g.add(door);
-    const glass = new THREE.Mesh(new THREE.BoxGeometry(0.1, 1.3, 0.5), matGlass);
-    glass.position.set(0, 1.25, s * 0.45);
-    g.add(glass);
+    const cz = s * 0.45;
+    const bot = new THREE.Mesh(new THREE.BoxGeometry(T, RAIL_BOT, W), matWhite);
+    bot.position.set(0, RAIL_BOT / 2, cz); bot.castShadow = true; g.add(bot);
+    const top = new THREE.Mesh(new THREE.BoxGeometry(T, RAIL_TOP, W), matWhite);
+    top.position.set(0, H - RAIL_TOP / 2, cz); top.castShadow = true; g.add(top);
+    for (const e of [-1, 1]) {           // stiles down the hinge and latch edges
+      const st = new THREE.Mesh(new THREE.BoxGeometry(T, LITE_H, STILE), matWhite);
+      st.position.set(0, RAIL_BOT + LITE_H / 2, cz + e * (W - STILE) / 2);
+      st.castShadow = true; g.add(st);
+    }
+    const lite = new THREE.Mesh(
+      new THREE.BoxGeometry(T * 0.4, LITE_H, W - STILE * 2), matGlass);
+    lite.position.set(0, RAIL_BOT + LITE_H / 2, cz);
+    g.add(lite);
     const handle = new THREE.Mesh(new THREE.BoxGeometry(0.12, 0.5, 0.06), matBlackMetal);
     handle.position.set(0.05, 1.0, s * 0.12);
     g.add(handle);
@@ -2724,11 +2737,6 @@ const EYE = 1.62;
 const keys = {};
 addEventListener('keydown', e => {
   keys[e.code] = true;
-  if (mini) {
-    if (e.code === 'Space') { e.preventDefault(); miniJump(); }
-    if (e.code === 'Escape') endTimelineRunner(true);
-    return;   // the minigame swallows everything else
-  }
   if (alienQuiz) return;   // typing a name — let the input have every key
   if (e.code === 'Space') {
     e.preventDefault();
@@ -4233,13 +4241,11 @@ function seedMacPotion() {
 
 // ---------- the box can contain any of these ----------
 // weight = how often it turns up relative to the others
-const MYSTERY_REWARDS = ['camcorder', 'timeline', 'nuke', 'medkit', 'arsenal', 'shield', 'life1up'];
-const REWARD_WEIGHTS = { camcorder: 3, timeline: 3, nuke: 3, medkit: 3, arsenal: 3, shield: 2, life1up: 1 };
+const MYSTERY_REWARDS = ['camcorder', 'nuke', 'medkit', 'arsenal', 'shield', 'life1up'];
+const REWARD_WEIGHTS = { camcorder: 3, nuke: 4, medkit: 4, arsenal: 4, shield: 2, life1up: 1 };
 const REWARD_INFO = {
   camcorder: { icon: '🎥', name: 'Laser Camcorder', accent: '#4ec5ff',
                desc: 'Hold fire to spray cutting lasers until the round ends.' },
-  timeline:  { icon: '🎬', name: 'Timeline Runner', accent: '#c8a6ff',
-               desc: 'Survive a Premiere sequence. Every frame banks points.' },
   nuke:      { icon: '💥', name: 'Exposure Bomb', accent: '#fff2a8',
                desc: 'One blinding frame. Everything in the room is deleted.' },
   medkit:    { icon: '🩹', name: 'Full Restore', accent: '#5cff9d',
@@ -4479,10 +4485,6 @@ function grantMysteryReward(key) {
       upgradeWeapon();
       break;
 
-    case 'timeline':
-      setTimeout(startTimelineRunner, 1400);   // let the popup land first
-      break;
-
     case 'nuke': {
       flashFx.style.opacity = 0.85;
       setTimeout(() => flashFx.style.opacity = 0, 220);
@@ -4547,271 +4549,6 @@ function sfx1up() {
   });
 }
 
-// ============================================================
-// MYSTERY BOX MINIGAME — Adobe Premiere "Timeline Runner"
-// ============================================================
-const miniEl = document.getElementById('mini');
-const miniCanvas = document.getElementById('miniCanvas');
-const mctx = miniCanvas.getContext('2d');
-let mini = null;
-
-const TRACK_CLIP_COLORS = ['#4a5fd0', '#6a4ad0', '#3f7fc4', '#5a4ab8'];
-
-function startTimelineRunner() {
-  mini = {
-    t: 0, dist: 0, speed: 420, hp: 3,
-    py: 0, vy: 0, grounded: true,
-    obstacles: [], clips: [], keyframes: [],
-    scroll: 0, over: false, endT: 0, dead: false,
-    nextObstacle: 420,
-  };
-  // pre-seed the decorative clips on the other tracks
-  for (let i = 0; i < 26; i++) {
-    mini.clips.push({
-      x: i * rnd(180, 300), w: rnd(90, 260), track: (Math.random() * 3) | 0,
-      col: TRACK_CLIP_COLORS[(Math.random() * TRACK_CLIP_COLORS.length) | 0],
-    });
-  }
-  miniEl.style.display = 'flex';
-  if (document.pointerLockElement) document.exitPointerLock();
-  showToast('', 1);
-}
-
-function endTimelineRunner(bailed) {
-  if (!mini) return;
-  const earned = Math.round(mini.dist / 8) * (mini.dead ? 1 : 2);
-  game.score += earned;
-  miniEl.style.display = 'none';
-  mini = null;
-  if (!bailed) showToast(`TIMELINE RENDERED — +${earned} POINTS`, 3200);
-  canvas.requestPointerLock();
-}
-
-function miniJump() {
-  if (!mini || mini.over) return;
-  if (mini.grounded) { mini.vy = -720; mini.grounded = false; }
-}
-
-function updateTimelineRunner(dt) {
-  const m = mini;
-  const W = miniCanvas.width, H = miniCanvas.height;
-  const GROUND = H - 190;          // top of the V1 track = the "floor"
-
-  if (!m.over) {
-    m.t += dt;
-    m.speed = 420 + m.t * 26;
-    m.dist += m.speed * dt;
-    m.scroll += m.speed * dt;
-
-    // physics
-    m.vy += 1900 * dt;
-    m.py += m.vy * dt;
-    if (m.py >= 0) { m.py = 0; m.vy = 0; m.grounded = true; }
-
-    // spawn obstacles
-    m.nextObstacle -= m.speed * dt;
-    if (m.nextObstacle <= 0) {
-      m.nextObstacle = rnd(300, 520) - Math.min(140, m.t * 5);
-      const kind = Math.random();
-      m.obstacles.push({
-        x: W + 60,
-        type: kind < 0.45 ? 'error' : kind < 0.75 ? 'keyframe' : 'gap',
-        w: kind < 0.45 ? 44 : kind < 0.75 ? 34 : 70,
-        h: kind < 0.45 ? 66 : kind < 0.75 ? 46 : 26,
-        hit: false,
-      });
-    }
-    for (const o of m.obstacles) o.x -= m.speed * dt;
-    m.obstacles = m.obstacles.filter(o => o.x > -140);
-
-    // collision — player box is 46x56 at x=190
-    const px = 190, pw = 44, ph = 54;
-    const pyTop = GROUND - ph + m.py;
-    for (const o of m.obstacles) {
-      if (o.hit) continue;
-      const oyTop = GROUND - o.h;
-      if (px + pw > o.x && px < o.x + o.w && pyTop + ph > oyTop) {
-        o.hit = true;
-        m.hp--;
-        m.flash = 0.35;
-        if (m.hp <= 0) { m.over = true; m.dead = true; m.endT = 1.6; }
-      }
-    }
-    if (m.flash > 0) m.flash -= dt;
-    // survive 32 seconds and the render completes
-    if (m.t > 32) { m.over = true; m.endT = 2.0; }
-  } else {
-    m.endT -= dt;
-    if (m.endT <= 0) { endTimelineRunner(false); return; }
-  }
-
-  // ---------------- draw the Premiere UI ----------------
-  mctx.fillStyle = '#1e2129'; mctx.fillRect(0, 0, W, H);
-
-  // track header column
-  mctx.fillStyle = '#252932'; mctx.fillRect(0, 0, 118, H);
-  const trackY = [H - 470, H - 380, H - 290, GROUND, H - 100];
-  const trackNames = ['V4', 'V3', 'V2', 'V1', 'A1'];
-  mctx.font = 'bold 13px Courier New';
-  for (let i = 0; i < trackY.length; i++) {
-    mctx.fillStyle = '#2e3440';
-    mctx.fillRect(6, trackY[i] - 4, 106, 78);
-    mctx.fillStyle = i === 3 ? '#c8a6ff' : '#8d95a3';
-    mctx.fillText(trackNames[i], 18, trackY[i] + 26);
-    mctx.fillStyle = '#454c5a';
-    mctx.fillRect(52, trackY[i] + 12, 18, 14);
-    mctx.fillRect(76, trackY[i] + 12, 18, 14);
-  }
-
-  // timeline ruler + timecode
-  mctx.fillStyle = '#2b2f3a'; mctx.fillRect(118, 0, W - 118, 34);
-  mctx.strokeStyle = '#4a515f'; mctx.lineWidth = 1;
-  mctx.font = '11px Courier New';
-  const tickOff = m.scroll % 100;
-  for (let x = 118 - tickOff; x < W; x += 100) {
-    mctx.beginPath(); mctx.moveTo(x, 20); mctx.lineTo(x, 34); mctx.stroke();
-    const secs = Math.floor((m.scroll + x - 118) / 100);
-    mctx.fillStyle = '#7f8794';
-    mctx.fillText(`00:00:${String(secs % 60).padStart(2, '0')}:00`, x + 4, 15);
-  }
-  for (let x = 118 - tickOff + 20; x < W; x += 20) {
-    mctx.beginPath(); mctx.moveTo(x, 28); mctx.lineTo(x, 34); mctx.stroke();
-  }
-
-  // track lanes
-  for (let i = 0; i < trackY.length; i++) {
-    mctx.fillStyle = i === 3 ? '#22262f' : '#1f232b';
-    mctx.fillRect(118, trackY[i] - 4, W - 118, 78);
-    mctx.strokeStyle = '#2b303a';
-    mctx.strokeRect(118, trackY[i] - 4, W - 118, 78);
-  }
-
-  // decorative clips on the non-play tracks
-  for (const c of m.clips) {
-    let cx = c.x - m.scroll * 0.85;
-    const span = 26 * 300;
-    cx = ((cx % span) + span) % span - 200;
-    if (cx > W || cx + c.w < 118) continue;
-    const ty = [trackY[0], trackY[1], trackY[2]][c.track];
-    mctx.fillStyle = c.col;
-    mctx.fillRect(Math.max(118, cx), ty, Math.min(c.w, cx + c.w - 118), 70);
-    mctx.fillStyle = 'rgba(255,255,255,0.16)';
-    mctx.fillRect(Math.max(118, cx), ty, Math.min(c.w, cx + c.w - 118), 15);
-    // little waveform squiggle
-    mctx.strokeStyle = 'rgba(255,255,255,0.25)';
-    mctx.beginPath();
-    for (let k = 0; k < c.w; k += 6) {
-      const wx = cx + k;
-      if (wx < 118 || wx > W) continue;
-      mctx.moveTo(wx, ty + 48);
-      mctx.lineTo(wx, ty + 48 - Math.abs(Math.sin(k * 0.4 + c.x)) * 14);
-    }
-    mctx.stroke();
-  }
-
-  // audio waveform track
-  mctx.fillStyle = '#2f7d5b';
-  mctx.fillRect(118, trackY[4], W - 118, 70);
-  mctx.strokeStyle = '#8fe8bb'; mctx.beginPath();
-  for (let x = 118; x < W; x += 4) {
-    const a = Math.sin((x + m.scroll) * 0.05) * Math.sin((x + m.scroll) * 0.013) * 26;
-    mctx.moveTo(x, trackY[4] + 35 - a);
-    mctx.lineTo(x, trackY[4] + 35 + a);
-  }
-  mctx.stroke();
-
-  // the V1 "running" clip strip the player runs along
-  mctx.fillStyle = '#6a4ad0';
-  mctx.fillRect(118, GROUND, W - 118, 70);
-  mctx.fillStyle = 'rgba(255,255,255,0.14)';
-  mctx.fillRect(118, GROUND, W - 118, 16);
-  mctx.fillStyle = 'rgba(0,0,0,0.25)';
-  for (let x = 118 - (m.scroll % 60); x < W; x += 60) mctx.fillRect(x, GROUND, 2, 70);
-
-  // obstacles
-  for (const o of m.obstacles) {
-    const oy = GROUND - o.h;
-    if (o.type === 'error') {
-      mctx.fillStyle = o.hit ? '#5a2222' : '#d0342c';
-      mctx.fillRect(o.x, oy, o.w, o.h);
-      mctx.fillStyle = '#fff'; mctx.font = 'bold 11px Courier New';
-      mctx.fillText('!', o.x + o.w / 2 - 3, oy + o.h / 2 + 4);
-      mctx.strokeStyle = '#ff8a80'; mctx.strokeRect(o.x, oy, o.w, o.h);
-    } else if (o.type === 'keyframe') {
-      mctx.fillStyle = o.hit ? '#5a4a22' : '#e8c22e';
-      mctx.beginPath();
-      mctx.moveTo(o.x + o.w / 2, oy);
-      mctx.lineTo(o.x + o.w, oy + o.h / 2);
-      mctx.lineTo(o.x + o.w / 2, oy + o.h);
-      mctx.lineTo(o.x, oy + o.h / 2);
-      mctx.closePath(); mctx.fill();
-    } else {
-      mctx.fillStyle = o.hit ? '#333' : '#12141a';
-      mctx.fillRect(o.x, GROUND - o.h, o.w, o.h + 70);
-      mctx.strokeStyle = '#ff5544';
-      mctx.setLineDash([6, 5]);
-      mctx.strokeRect(o.x, GROUND - o.h, o.w, o.h + 70);
-      mctx.setLineDash([]);
-    }
-  }
-
-  // the player: a little render-clip guy
-  const px = 190, ph = 54, pw = 44;
-  const pyTop = GROUND - ph + m.py;
-  mctx.save();
-  if (m.flash > 0 && Math.floor(m.flash * 20) % 2 === 0) mctx.globalAlpha = 0.35;
-  mctx.fillStyle = '#f5e04a';
-  mctx.fillRect(px, pyTop, pw, ph);
-  mctx.fillStyle = '#1e2129';
-  const bounce = m.grounded ? Math.sin(m.t * 22) * 2 : 0;
-  mctx.fillRect(px + 9, pyTop + 14 + bounce, 8, 9);
-  mctx.fillRect(px + 27, pyTop + 14 + bounce, 8, 9);
-  mctx.fillRect(px + 12, pyTop + 34, 20, 4);
-  // running legs
-  mctx.fillStyle = '#c8a6ff';
-  if (m.grounded) {
-    const s = Math.sin(m.t * 18) * 8;
-    mctx.fillRect(px + 8, GROUND, 9, 10 + s);
-    mctx.fillRect(px + 26, GROUND, 9, 10 - s);
-  } else {
-    mctx.fillRect(px + 8, pyTop + ph, 9, 10);
-    mctx.fillRect(px + 26, pyTop + ph, 9, 10);
-  }
-  mctx.restore();
-
-  // playhead
-  mctx.strokeStyle = '#e8e8ee'; mctx.lineWidth = 2;
-  mctx.beginPath(); mctx.moveTo(px + pw / 2, 26); mctx.lineTo(px + pw / 2, H); mctx.stroke();
-  mctx.fillStyle = '#e8e8ee';
-  mctx.beginPath();
-  mctx.moveTo(px + pw / 2 - 9, 20); mctx.lineTo(px + pw / 2 + 9, 20);
-  mctx.lineTo(px + pw / 2, 34); mctx.closePath(); mctx.fill();
-
-  // HUD strip
-  mctx.fillStyle = 'rgba(10,12,16,0.85)'; mctx.fillRect(0, H - 44, W, 44);
-  mctx.font = 'bold 18px Courier New';
-  mctx.fillStyle = '#c8a6ff';
-  mctx.fillText(`RENDER  ${Math.min(100, Math.round(m.t / 32 * 100))}%`, 20, H - 16);
-  mctx.fillStyle = '#eaffea';
-  mctx.fillText(`FRAMES ${Math.round(m.dist)}`, 300, H - 16);
-  mctx.fillStyle = '#ff6a5a';
-  mctx.fillText('MEDIA ' + '♥'.repeat(Math.max(0, m.hp)), 560, H - 16);
-  // render progress bar
-  mctx.fillStyle = '#2b2f3a'; mctx.fillRect(820, H - 30, 420, 16);
-  mctx.fillStyle = '#6a4ad0'; mctx.fillRect(820, H - 30, 420 * Math.min(1, m.t / 32), 16);
-
-  if (m.over) {
-    mctx.fillStyle = 'rgba(8,9,13,0.82)'; mctx.fillRect(0, 0, W, H);
-    mctx.textAlign = 'center';
-    mctx.font = 'bold 46px Courier New';
-    mctx.fillStyle = m.dead ? '#ff5544' : '#7CFC00';
-    mctx.fillText(m.dead ? 'MEDIA OFFLINE' : 'RENDER COMPLETE', W / 2, H / 2 - 10);
-    mctx.font = '20px Courier New';
-    mctx.fillStyle = '#eaffea';
-    mctx.fillText(`+${Math.round(m.dist / 8) * (m.dead ? 1 : 2)} POINTS`, W / 2, H / 2 + 34);
-    mctx.textAlign = 'left';
-  }
-}
 
 // chunky pro camcorder view model with a laser emitter
 let camcorder = null;
@@ -5335,9 +5072,8 @@ window.WEAPON = weapon;
 window.DEBUG = {
   spawnFaceEnemy, spawnSparks, addShake, upgradeWeapon, DOOR_A, DOOR_B,
   openPortal, selectWeapon, spawnCrate,
-  startTimelineRunner, grantMysteryReward, pickMysteryReward, MYSTERY_REWARDS,
+  grantMysteryReward, pickMysteryReward, MYSTERY_REWARDS,
   spawnDrop, clearDrops, updateDrops, getDrops: () => drops, useExtraLife, refreshLives, damagePlayer,
-  getMini: () => mini,
   spawnBear, getBear: () => bear, showRewardPopup, REWARD_INFO, spawnWormEnemy, spawnPatrickEnemy,
   startAlienQuiz, isHeadshot, headSphere, camera, scene, THREE, spawnSpongeEnemy,
   getCrate: () => crate, damageCrate, updateEnemy, wormCrawl,
@@ -5563,7 +5299,6 @@ function pickTier() {
 let flashDecay = 0;
 addEventListener('mouseup', e => { if (e.button === 0) mouseHeld = false; });
 addEventListener('mousedown', e => {
-  if (mini) { miniJump(); return; }
   if (alienQuiz) return;
   if (game.state === 'menu' || game.state === 'gameover') return;
   if (wheelOpen) return;
@@ -6227,13 +5962,6 @@ function tick() {
     d.open += (want - d.open) * Math.min(1, dt * (d.broken ? 6 : 2.6));
     d.pivot.rotation.y = d.s * d.open * Math.PI * 0.62;
     if (!d.broken && d.leaf.rotation.z) d.leaf.rotation.z *= Math.max(0, 1 - dt * 9);
-  }
-
-  // the timeline runner takes over completely while it's up
-  if (mini) {
-    updateTimelineRunner(dt);
-    composer.render();
-    return;
   }
 
   // the alien quiz pauses the fight but keeps the world rendering
