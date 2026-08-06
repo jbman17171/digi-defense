@@ -3809,8 +3809,11 @@ const FLASH_RELOAD = 0.85;  // wind-up once both are gone
 const WEAPONS = [
   { id: 'sdcard', name: 'SD CARD SHURIKEN', melee: false, cd: 0.22 },
   { id: 'camera', name: 'FLASH CAMERA', melee: false, cd: 0.55 },
-  { id: 'sword', name: 'LARP FOAM SWORD', melee: true, cd: 0.42, reach: 2.6, arc: 0.85, dmg: 2 },
-  { id: 'racket', name: 'TENNIS RACKET', melee: true, cd: 0.5, reach: 2.4, arc: 0.7, dmg: 1 },
+  // Melee is the close-range trade: you have to be in their face, but it hits
+  // everything in the cone at once and it hits FAST. The sword is the heavy
+  // one, the racket is the flurry.
+  { id: 'sword', name: 'LARP FOAM SWORD', melee: true, cd: 0.20, reach: 2.6, arc: 0.9, dmg: 2, kb: 0.30 },
+  { id: 'racket', name: 'TENNIS RACKET', melee: true, cd: 0.13, reach: 2.4, arc: 0.8, dmg: 1, kb: 0.55 },
   // unlocked from a mystery box — sits alongside the camera, doesn't replace it
   { id: 'camcorder', name: 'LASER CAMCORDER', melee: false, cd: 0.09, locked: true },
 ];
@@ -4000,11 +4003,15 @@ function meleeSwing() {
     // a clean swing to the face takes the head off
     if (isHeadshot(e, camera.position, fwd)) { headshotKill(e, camera.position); continue; }
     e.hp -= w.dmg * (game.arsenalT > 0 ? 2 : 1);
-    e.stun = 0.3;
+    // Scaled to the swing rate. A flat stun longer than the cooldown would
+    // freeze everything in the cone forever now that these swing this fast,
+    // and bosses shrug most of it off so melee against one stays a real risk.
+    e.stun = w.cd * (e.boss ? 0.35 : 0.9);
     spawnSparks(e.model.position.clone().setY(1.0), w.id === 'sword' ? 0x9fd8ff : 0xe8e832, 8, 0.8);
-    // knockback
+    // Per-swing shove, so the racket still pushes far harder per second than
+    // the sword — that, not damage, is its reason to exist.
     const kb = e.model.position.clone().sub(camera.position).setY(0).normalize()
-      .multiplyScalar(w.id === 'racket' ? 1.5 : 0.8);
+      .multiplyScalar(w.kb * (e.boss ? 0.4 : 1));
     e.model.position.add(kb);
     if (e.hp <= 0) killEnemy(e);
   }
@@ -5656,7 +5663,7 @@ async function decodeSfx() {
 
 // A one-shot fired from the tick loop would stack 60 copies a second into a
 // buzzing wash, so every sound has a minimum gap between retriggers.
-const SFX_GAP = { hit: 0.06, laser: 0.07, thunk: 0.05, whack: 0.05, glass: 0.06 };
+const SFX_GAP = { hit: 0.06, laser: 0.07, thunk: 0.05, whack: 0.05, glass: 0.06, swing: 0.1 };
 const SFX_GAP_DEFAULT = 0.04;
 const sfxLast = {};
 
@@ -5743,7 +5750,7 @@ sfxDoorStop = () => {
 sfxRound     = () => { playSfx('round', 0.6)                     || synthSfx.round(); };
 sfxThunk     = () => { playSfx('thunk', 0.6, rnd(0.9, 1.15))     || synthSfx.thunk(); };
 sfxLaser     = () => { playSfx('laser', 0.22, rnd(0.9, 1.2))     || synthSfx.laser(); };
-sfxSwing     = () => { playSfx('swing', 0.4, rnd(0.9, 1.15))     || synthSfx.swing(); };
+sfxSwing     = () => { playSfx('swing', 0.28, rnd(0.9, 1.2))     || synthSfx.swing(); };
 sfxWhack     = () => { playSfx('whack', 0.6, rnd(0.9, 1.1))      || synthSfx.whack(); };
 sfxJump      = () => { playSfx('jump', 0.3, rnd(0.95, 1.1))      || synthSfx.jump(); };
 sfxPortal    = () => { playSfx('portal', 0.5)                    || synthSfx.portal(); };
@@ -6169,7 +6176,7 @@ function tick() {
     if (attackCd > 0) attackCd -= dt;
     const wm = weaponModels[WEAPONS[curWeapon].id];
     if (swingT > 0) {
-      swingT += dt * 4.2;
+      swingT += dt / Math.max(0.1, WEAPONS[curWeapon].cd);
       if (swingT >= 1) swingT = 0;
     }
     if (wm) {
