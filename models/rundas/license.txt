@@ -1,0 +1,11 @@
+Model Information:
+* title:	Creatures>Bosses>Rundas 2
+* source:	https://sketchfab.com/3d-models/creaturesbossesrundas-2-c2fc0fdfa0cf4b7991cb6f46d11451f4
+* author:	jameslucino117 (https://sketchfab.com/jameslucino117)
+
+Model License:
+* license type:	CC-BY-4.0 (http://creativecommons.org/licenses/by/4.0/)
+* requirements:	Author must be credited. Commercial use is allowed.
+
+If you use this 3D model in your project be sure to copy paste this credit wherever you share it:
+This work is based on "Creatures>Bosses>Rundas 2" (https://sketchfab.com/3d-models/creaturesbossesrundas-2-c2fc0fdfa0cf4b7991cb6f46d11451f4) by jameslucino117 (https://sketchfab.com/jameslucino117) licensed under CC-BY-4.0 (http://creativecommons.org/licenses/by/4.0/)

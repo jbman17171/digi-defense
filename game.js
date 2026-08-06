@@ -29,18 +29,21 @@ const TIERS = {
     label: 'LOW', maxPR: 1, minScale: 0.5,
     bloom: false, shadows: false, shadowSize: 512, softShadows: false, shadowEvery: 6,
     warmCans: 0, lightBoost: 1.5, dust: 0, fall: 600, aniso: 1, texMax: 512,
+    enemyShadows: false,
     video: false, grain: 0.022, envRes: 0.1, fogFarMul: 0.75,
   },
   medium: {
     label: 'MEDIUM', maxPR: 1.25, minScale: 0.6,
-    bloom: true, shadows: true, shadowSize: 1024, softShadows: false, shadowEvery: 3,
+    bloom: true, shadows: true, shadowSize: 768, softShadows: false, shadowEvery: 3,
     warmCans: 4, lightBoost: 1.2, dust: 260, fall: 1200, aniso: 4, texMax: 1024,
+    enemyShadows: false,
     video: true, grain: 0.034, envRes: 0.04, fogFarMul: 1,
   },
   high: {
     label: 'HIGH', maxPR: 2, minScale: 0.75,
     bloom: true, shadows: true, shadowSize: 2048, softShadows: true, shadowEvery: 1,
     warmCans: 10, lightBoost: 1, dust: 700, fall: 2200, aniso: 8, texMax: 4096,
+    enemyShadows: true,
     video: true, grain: 0.042, envRes: 0.04, fogFarMul: 1,
   },
 };
@@ -249,6 +252,9 @@ addEventListener('resize', resize);
 // lower tiers every loaded map gets resampled down to the tier's ceiling and
 // the original decoded bitmap is released.
 const ANISO = Math.min(TIER.aniso, renderer.capabilities.getMaxAnisotropy());
+// Enemies are skinned meshes, so casting a shadow means skinning and drawing
+// every one of them a second time. Only the top tier pays for that.
+const ENEMY_SHADOWS = TIER.shadows && TIER.enemyShadows;
 const TEX_SLOTS = ['map', 'normalMap', 'roughnessMap', 'metalnessMap', 'aoMap',
   'emissiveMap', 'alphaMap', 'bumpMap', 'displacementMap', 'specularMap', 'lightMap'];
 const tunedTextures = new WeakSet();
@@ -773,11 +779,20 @@ function supportHeight(x, z, r = 0.3) {
 const world = new THREE.Group();
 scene.add(world);
 
+// The room is hundreds of boxes. They used to get a BoxGeometry each, which is
+// hundreds of GPU buffers holding identical cube data; one shared unit cube
+// scaled per mesh is the same picture for a fraction of the memory. They also
+// never move, so their matrices are baked once instead of recomposed 60x a
+// second — if you ever need to move one of these, set matrixAutoUpdate back on.
+const UNIT_BOX = new THREE.BoxGeometry(1, 1, 1);
 function box(w, h, d, mat, x, y, z, ry = 0, shadow = true) {
-  const m = new THREE.Mesh(new THREE.BoxGeometry(w, h, d), mat);
+  const m = new THREE.Mesh(UNIT_BOX, mat);
+  m.scale.set(w, h, d);
   m.position.set(x, y, z);
   m.rotation.y = ry;
   m.castShadow = shadow; m.receiveShadow = true;
+  m.updateMatrix();
+  m.matrixAutoUpdate = false;
   world.add(m);
   return m;
 }
@@ -1862,7 +1877,7 @@ buildSponge(-2.9, 10.9);
       m.scale.setScalar(s);
       const bb2 = new THREE.Box3().setFromObject(m);
       m.position.y -= bb2.min.y;                          // feet on the floor
-      m.traverse(o => { if (o.isMesh) { o.castShadow = true; o.frustumCulled = false; } });
+      m.traverse(o => { if (o.isMesh) { o.castShadow = ENEMY_SHADOWS; o.frustumCulled = false; } });
       const holder = new THREE.Group();
       holder.add(m);
       holder.position.set(-2.9, 0, 11.5);
@@ -2291,8 +2306,10 @@ const sun = new THREE.DirectionalLight(0xfff0d4, 2.0);
 sun.position.set(-22, 16, 6);
 sun.castShadow = TIER.shadows;
 sun.shadow.mapSize.set(TIER.shadowSize, TIER.shadowSize);
-sun.shadow.camera.left = -16; sun.shadow.camera.right = 16;
-sun.shadow.camera.top = 16; sun.shadow.camera.bottom = -16;
+// the hall is 12 x 18m — a +/-16 frustum spent half the shadow map on empty
+// ground, so this is sharper shadows out of a smaller map
+sun.shadow.camera.left = -11; sun.shadow.camera.right = 11;
+sun.shadow.camera.top = 12; sun.shadow.camera.bottom = -12;
 sun.shadow.camera.near = 1; sun.shadow.camera.far = 60;
 sun.shadow.bias = -0.0006;
 sun.shadow.normalBias = 0.02;
@@ -2921,6 +2938,8 @@ function sfxRound() {
 // ============================================================
 let robotGltf = null;
 const enemies = [];
+// How many can be on their feet at once. The rest wait in the queue.
+const MAX_ALIVE = 6;
 
 loadModel('./models/RobotExpressive.glb', g => { robotGltf = g; });
 
@@ -3089,7 +3108,7 @@ function patrickPlay(e, key) {
 function spawnSpongeEnemy() {
   if (!spongeGltf) return null;
   const model = SkeletonUtils.clone(spongeGltf.scene);
-  model.traverse(o => { if (o.isMesh) { o.castShadow = true; o.frustumCulled = false; } });
+  model.traverse(o => { if (o.isMesh) { o.castShadow = ENEMY_SHADOWS; o.frustumCulled = false; } });
 
   model.scale.setScalar(1);
   model.position.set(0, 0, 0);
@@ -3166,10 +3185,104 @@ function spawnSpongeEnemy() {
   return e;
 }
 
+// ---------- Rundas: the ice boss, in through the porch doors ----------
+// The model only ships an Idle clip, so the walk and the swing are driven here:
+// a heavy shoulder roll while it closes on you and a two-handed overhead slam
+// when it's in reach.
+let rundasGltf = null;
+loadModel('./models/rundas/scene.gltf', g => {
+  rundasGltf = g;
+  console.log('Rundas loaded —', g.animations.length, 'clips');
+});
+
+function rundasStride(e, dt, rate = 1) {
+  e.t += dt * rate;
+  const rig = e.rig;
+  if (!rig) return;
+  // lumbering weight shift rather than a walk cycle
+  rig.position.y = Math.abs(Math.sin(e.t * 3.2)) * 0.075;
+  rig.rotation.z = Math.sin(e.t * 3.2) * 0.07;
+  rig.rotation.x = Math.sin(e.t * 6.4) * 0.02;
+}
+
+function rundasSlam(e, dt) {
+  e.t += dt * 5.5;
+  const rig = e.rig;
+  if (!rig) return;
+  const k = (Math.sin(e.t) + 1) / 2;          // wind up, then drop
+  rig.rotation.x = -0.34 + k * 0.62;
+  rig.position.y = k * 0.12;
+  rig.rotation.z = 0;
+}
+
+function spawnRundasEnemy(doorDef) {
+  if (!rundasGltf) return spawnFaceEnemy(doorDef, 3, true);
+  const model = SkeletonUtils.clone(rundasGltf.scene);
+  model.traverse(o => { if (o.isMesh) { o.castShadow = ENEMY_SHADOWS; o.frustumCulled = false; } });
+
+  // measure the bind pose — setFromObject is unreliable on skinned meshes
+  model.scale.setScalar(1);
+  model.position.set(0, 0, 0);
+  model.updateMatrixWorld(true);
+  const bind = new THREE.Box3();
+  model.traverse(o => {
+    if (o.isMesh) {
+      o.geometry.computeBoundingBox();
+      bind.union(o.geometry.boundingBox.clone().applyMatrix4(o.matrixWorld));
+    }
+  });
+  const size = bind.getSize(new THREE.Vector3());
+  const sc = 2.35 / Math.max(size.y, 0.001);      // head and shoulders over you
+  model.scale.setScalar(sc);
+  model.position.y = -bind.min.y * sc;
+
+  // rig group so the stride can move the body without fighting the root
+  const rig = new THREE.Group();
+  rig.add(model);
+  const root = new THREE.Group();
+  root.add(rig);
+  root.position.set(rnd(7.4, 8.2), 0, 0.15 + rnd(-0.4, 0.4));   // up the porch steps
+  scene.add(root);
+
+  const mixer = new THREE.AnimationMixer(model);
+  if (rundasGltf.animations.length) mixer.clipAction(rundasGltf.animations[0]).play();
+
+  const head = new THREE.Mesh(new THREE.PlaneGeometry(0.7, 0.7),
+    new THREE.MeshBasicMaterial({ visible: false }));
+  head.position.y = 2.0;
+  root.add(head);
+
+  const mats = [];
+  model.traverse(o => { if (o.isMesh && o.material) { o.material = o.material.clone(); mats.push(o.material); } });
+
+  // frost light so it reads as the ice boss even in a dark round
+  const aura = new THREE.PointLight(0x7fd8ff, 5, 7, 1.6);
+  aura.position.y = 1.5;
+  root.add(aura);
+
+  const e = {
+    kind: 'rundas', boss: true,
+    model: root, rig, head, mixer, mats, hitFlash: 0,
+    tier: 3,
+    hp: 22 + game.round * 2, maxHp: 22 + game.round * 2,   // tankier than the face boss
+    speed: 1.5 + game.round * 0.04,               // slow and inevitable
+    state: 'enter',
+    doorZ: 0.15,
+    attackCd: 0, stun: 0, deadT: 0, t: 0,
+    cur: '',
+    y: 0, vy: 0, grounded: true, jumpCd: 0,
+  };
+  enemies.push(e);
+  rearTarget = 1;
+  addShake(0.6);
+  showToast('!!! RUNDAS CAME IN OFF THE PORCH !!!', 3200);
+  return e;
+}
+
 function spawnPatrickEnemy(doorDef, tier) {
   if (!patrickGltf) return spawnFaceEnemy(doorDef, tier);
   const model = SkeletonUtils.clone(patrickGltf.scene);
-  model.traverse(o => { if (o.isMesh) { o.castShadow = true; o.frustumCulled = false; } });
+  model.traverse(o => { if (o.isMesh) { o.castShadow = ENEMY_SHADOWS; o.frustumCulled = false; } });
 
   // measure the bind pose (setFromObject is unreliable on skinned meshes)
   model.scale.setScalar(1);
@@ -3403,7 +3516,9 @@ function faceWaddle(e, dt, fast = 1) {
   e.rig.position.y = Math.abs(Math.sin(e.t)) * 0.07;
 }
 function enemyPlay(e, name, once = false) {
-  if (!e.actions || e.kind === 'patrick') return;   // patrick has its own clip names
+  // patrick has his own clip names; rundas only ships an Idle and is animated
+  // by hand in rundasStride / rundasSlam
+  if (!e.actions || e.kind === 'patrick' || e.kind === 'rundas') return;
   if (e.cur === name) return;
   const prev = e.actions[e.cur];
   const next = e.actions[name];
@@ -3430,6 +3545,7 @@ function updateEnemy(e, dt) {
     e.deadT += dt;
     if (e.kind === 'face') e.rig.rotation.x = -Math.min(Math.PI / 2, e.deadT * 2.6);
     if (e.kind === 'patrick') patrickPlay(e, 'Fall');
+    if (e.kind === 'rundas') e.rig.rotation.x = -Math.min(Math.PI / 2.2, e.deadT * 1.5);
     if (e.kind === 'worm') {
       e.headGrp.rotation.z = Math.min(Math.PI / 2, e.deadT * 3);
       e.headGrp.position.y = Math.max(0.16, 0.42 - e.deadT * 0.5);
@@ -3489,10 +3605,12 @@ function updateEnemy(e, dt) {
     if (e.kind === 'face') faceWaddle(e, dt, 2.2);   // frantic arm flailing
     else if (e.kind === 'worm') wormCrawl(e, dt);    // rears up and lunges
     else if (e.kind === 'patrick') patrickPlay(e, 'LightCombo1');
+    else if (e.kind === 'rundas') rundasSlam(e, dt);
     e.attackCd -= dt;
     if (e.attackCd <= 0) {
-      e.attackCd = 1.1;
-      damagePlayer(9 + e.tier * 3);
+      // slower swing than the rest, but it lands like a truck
+      e.attackCd = e.kind === 'rundas' ? 1.6 : 1.1;
+      damagePlayer(e.kind === 'rundas' ? 22 : 9 + e.tier * 3);
     }
     if (e.actions && e.actions.Punch && e.actions.Punch.paused) {
       e.cur = 'Idle'; enemyPlay(e, 'Punch', true);
@@ -3502,6 +3620,7 @@ function updateEnemy(e, dt) {
     if (e.kind === 'face') faceWaddle(e, dt);
     else if (e.kind === 'worm') wormCrawl(e, dt);
     else if (e.kind === 'patrick') patrickPlay(e, 'Run');
+    else if (e.kind === 'rundas') rundasStride(e, dt, e.speed * 1.6);
     dir.normalize();
     // face movement
     aimEnemy(e, Math.atan2(dir.x, dir.z) + (e.yawOffset || 0), dt);
@@ -3582,15 +3701,29 @@ function flashEnemy(e) {
 }
 // burst of glowing sparks at a point
 const sparks = [];
+// Sparks fly constantly — every hit, every screen, every death. They used to
+// allocate a geometry AND a material per particle and then drop both on the
+// floor when the particle died, orphaning hundreds of GPU buffers over a run on
+// exactly the machines that can least afford it. Now they come off a pool that
+// reuses both, and there is a ceiling so a boss death can't spike the frame.
+const SPARK_GEO = new THREE.SphereGeometry(0.035, 6, 6);
+const sparkPool = [];
+const SPARK_MAX = 130;
+
 function spawnSparks(pos, color = 0xffd27a, n = 14, power = 1) {
+  n = Math.min(n, SPARK_MAX - sparks.length);
   for (let i = 0; i < n; i++) {
-    const s = new THREE.Mesh(new THREE.SphereGeometry(rnd(0.02, 0.05), 6, 6),
-      new THREE.MeshBasicMaterial({ color, transparent: true }));
+    const s = sparkPool.pop() ||
+      new THREE.Mesh(SPARK_GEO, new THREE.MeshBasicMaterial({ transparent: true }));
+    s.material.color.set(color);
+    s.material.opacity = 1;
     s.position.copy(pos);
-    s.userData.v = new THREE.Vector3(rnd(-1, 1), rnd(0.3, 1), rnd(-1, 1))
-      .normalize().multiplyScalar(rnd(1.5, 4.5) * power);
+    const v = s.userData.v || (s.userData.v = new THREE.Vector3());
+    v.set(rnd(-1, 1), rnd(0.3, 1), rnd(-1, 1)).normalize()
+     .multiplyScalar(rnd(1.5, 4.5) * power);
     s.userData.ttl = rnd(0.35, 0.8);
     s.userData.life = s.userData.ttl;
+    s.userData.size = rnd(0.55, 1.4);       // the variety the old radius gave
     scene.add(s);
     sparks.push(s);
   }
@@ -3980,6 +4113,24 @@ function closeWheel() {
 // ============================================================
 let crate = null;
 const debris = [];
+// Same story as the sparks: a BoxGeometry per splinter, never freed. One shared
+// cube scaled per piece, and the meshes come back to a pool when they expire.
+const debrisPool = [];
+const DEBRIS_MAX = 90;
+function spawnDebris(mat, at, w, h, d, vx, vy, vz, ttl) {
+  if (debris.length >= DEBRIS_MAX) return;
+  const p = debrisPool.pop() || new THREE.Mesh(UNIT_BOX, mat);
+  p.material = mat;
+  p.scale.set(w, h, d);
+  p.position.copy(at);
+  p.rotation.set(0, 0, 0);
+  const v = p.userData.v || (p.userData.v = new THREE.Vector3());
+  v.set(vx, vy, vz);
+  p.userData.ttl = ttl;
+  scene.add(p);
+  debris.push(p);
+  return p;
+}
 const beams = [];
 let mouseHeld = false;
 let laserCd = 0;
@@ -4071,12 +4222,9 @@ function damageCrate(point, radius = 2.2, amount = 1) {
 function breakCrate() {
   // wooden shrapnel
   for (let i = 0; i < 10; i++) {
-    const p = new THREE.Mesh(new THREE.BoxGeometry(rnd(0.08, 0.18), 0.03, rnd(0.08, 0.18)), crateMat);
-    p.position.copy(crate.mesh.position);
-    p.userData.v = new THREE.Vector3(rnd(-2, 2), rnd(2, 5), rnd(-2, 2));
-    p.userData.ttl = 1.3;
-    scene.add(p);
-    debris.push(p);
+    spawnDebris(crateMat, crate.mesh.position,
+      rnd(0.08, 0.18), 0.03, rnd(0.08, 0.18),
+      rnd(-2, 2), rnd(2, 5), rnd(-2, 2), 1.3);
   }
   const from = crate.mesh.position.clone();
   scene.remove(crate.mesh);
@@ -4123,14 +4271,9 @@ function breakMac(m) {
   spawnSparks(m.hit.clone(), 0xbfe6ff, 26, 1.6);
   spawnSparks(m.hit.clone(), 0xffd08a, 14, 1.2);
   for (let i = 0; i < 12; i++) {
-    const p = new THREE.Mesh(
-      new THREE.BoxGeometry(rnd(0.03, 0.1), rnd(0.01, 0.03), rnd(0.03, 0.09)),
-      i % 3 ? matWhite : matScreenDead);
-    p.position.copy(m.hit);
-    p.userData.v = new THREE.Vector3(rnd(-2.4, 2.4), rnd(1.6, 4.4), rnd(-2.4, 2.4));
-    p.userData.ttl = 1.5;
-    scene.add(p);
-    debris.push(p);
+    spawnDebris(i % 3 ? matWhite : matScreenDead, m.hit,
+      rnd(0.03, 0.1), rnd(0.01, 0.03), rnd(0.03, 0.09),
+      rnd(-2.4, 2.4), rnd(1.6, 4.4), rnd(-2.4, 2.4), 1.5);
   }
   // a short-lived fireball
   const ball = new THREE.Mesh(new THREE.SphereGeometry(0.3, 12, 10),
@@ -4196,20 +4339,18 @@ function hurtSideDoor(d, amount = 1) {
   return true;
 }
 
+const SPLINTER_MAT = new THREE.MeshStandardMaterial({ color: 0xc09257, roughness: 0.8 });
+const _splinterAt = new THREE.Vector3(), _splinterOff = new THREE.Vector3();
 function breakSideDoor(d) {
   d.broken = true;
   d.leaf.rotation.z = 0;
   for (const c of d.cracks) { c.material.map = crackStage[1]; c.material.opacity = 1; }
   // splinters off the latch edge
   for (let i = 0; i < 16; i++) {
-    const p = new THREE.Mesh(
-      new THREE.BoxGeometry(rnd(0.03, 0.12), rnd(0.02, 0.05), rnd(0.02, 0.06)),
-      new THREE.MeshStandardMaterial({ color: 0xc09257, roughness: 0.8 }));
-    p.position.copy(d.hit).add(new THREE.Vector3(rnd(-0.4, 0.4), rnd(-0.7, 0.8), 0));
-    p.userData.v = new THREE.Vector3(rnd(-1.8, 1.8), rnd(1.4, 3.8), rnd(-3.4, -1));
-    p.userData.ttl = 1.4;
-    scene.add(p);
-    debris.push(p);
+    _splinterAt.copy(d.hit).add(_splinterOff.set(rnd(-0.4, 0.4), rnd(-0.7, 0.8), 0));
+    spawnDebris(SPLINTER_MAT, _splinterAt,
+      rnd(0.03, 0.12), rnd(0.02, 0.05), rnd(0.02, 0.06),
+      rnd(-1.8, 1.8), rnd(1.4, 3.8), rnd(-3.4, -1), 1.4);
   }
   if (d.room) {
     d.room.open = true;
@@ -4979,7 +5120,7 @@ function startAlienQuiz() {
   if (!alienGltf || alienQuiz) return;
   game.alienDone = true;          // one alien per run, that's it
   const model = SkeletonUtils.clone(alienGltf.scene);
-  model.traverse(o => { if (o.isMesh) { o.castShadow = true; o.frustumCulled = false; } });
+  model.traverse(o => { if (o.isMesh) { o.castShadow = ENEMY_SHADOWS; o.frustumCulled = false; } });
 
   // size it to ~1.9m using the bind-pose geometry (setFromObject lies on skinned meshes)
   model.scale.setScalar(1);
@@ -5091,6 +5232,7 @@ window.DEBUG = {
   grantMysteryReward, pickMysteryReward, MYSTERY_REWARDS,
   spawnDrop, clearDrops, updateDrops, getDrops: () => drops, useExtraLife, refreshLives, damagePlayer,
   spawnBear, getBear: () => bear, showRewardPopup, REWARD_INFO, spawnWormEnemy, spawnPatrickEnemy,
+  spawnRundasEnemy,
   startAlienQuiz, isHeadshot, headSphere, camera, scene, THREE, spawnSpongeEnemy,
   getCrate: () => crate, damageCrate, updateEnemy, wormCrawl,
   startWave, endWave, MIRROR, revealMirror, refreshRoundBadge,
@@ -5209,8 +5351,11 @@ function startWave() {
   game.portalUsed = false;
   // make sure a box turns up early in every round
   if (!crate) game.crateTimer = Math.min(game.crateTimer, rnd(6, 12));
-  game.spawnQueue = Math.min(2 + game.round, 10);
-  game.spawnTimer = 1.2;
+  // Wave size ramps more gently and tops out lower than it used to (was
+  // 2 + round, capped at 10). MAX_ALIVE is the one that actually stops it
+  // feeling like a swarm — the queue drains only as fast as you clear it.
+  game.spawnQueue = Math.min(2 + Math.ceil(game.round * 0.6), 7);
+  game.spawnTimer = 1.6;
   sfxRound();
   sfxDoorStart();
   roundInfo.textContent = `ROUND ${game.round}`;
@@ -5934,8 +6079,12 @@ function tick() {
     s.position.addScaledVector(s.userData.v, dt);
     if (s.position.y < 0.03) { s.position.y = 0.03; s.userData.v.y *= -0.35; s.userData.v.multiplyScalar(0.6); }
     s.material.opacity = Math.max(0, s.userData.ttl / s.userData.life);
-    s.scale.setScalar(0.5 + s.material.opacity);
-    if (s.userData.ttl <= 0) { scene.remove(s); sparks.splice(i, 1); }
+    s.scale.setScalar(s.userData.size * (0.5 + s.material.opacity));
+    if (s.userData.ttl <= 0) {
+      scene.remove(s);
+      sparks.splice(i, 1);
+      sparkPool.push(s);            // back on the shelf, geometry and all
+    }
   }
 
   // post-processing uniforms
@@ -6045,13 +6194,21 @@ function tick() {
     // spawning
     if (game.state === 'wave' && game.spawnQueue > 0) {
       game.spawnTimer -= dt;
-      if (game.spawnTimer <= 0 && robotGltf) {
-        game.spawnTimer = Math.max(0.55, 1.4 - game.round * 0.07);
+      let alive = 0;
+      for (const e of enemies) if (e.state !== 'dying') alive++;
+      if (game.spawnTimer <= 0 && robotGltf && alive < MAX_ALIVE) {
+        game.spawnTimer = Math.max(0.95, 1.7 - game.round * 0.06);
         const useB = game.round >= 2 && (game.spawnDoorToggle = !game.spawnDoorToggle);
         const doorDef = useB ? DOOR_B : DOOR_A;
         // one boss can show up from round 3 on
         const wantBoss = game.round >= 3 && !game.bossOut && Math.random() < 0.3;
-        if (wantBoss) { spawnFaceEnemy(doorDef, 3, true); game.bossOut = true; }
+        if (wantBoss) {
+          // from round 5 the boss slot is usually Rundas; both come in through
+          // the porch doors and both hold the one-boss-at-a-time flag
+          if (game.round >= 5 && rundasGltf && Math.random() < 0.6) spawnRundasEnemy(doorDef);
+          else spawnFaceEnemy(doorDef, 3, true);
+          game.bossOut = true;
+        }
         else if (game.round >= 3 && Math.random() < 0.28) spawnPatrickEnemy(doorDef, pickTier());
         else if (game.round >= 2 && Math.random() < 0.3) spawnWormEnemy(doorDef, pickTier());
         else spawnFaceEnemy(doorDef, pickTier());
@@ -6120,7 +6277,7 @@ function tick() {
       p.position.addScaledVector(p.userData.v, dt);
       p.rotation.x += dt * 6; p.rotation.z += dt * 4;
       if (p.position.y < 0.02) p.position.y = 0.02;
-      if (p.userData.ttl <= 0) { scene.remove(p); debris.splice(i, 1); }
+      if (p.userData.ttl <= 0) { scene.remove(p); debris.splice(i, 1); debrisPool.push(p); }
     }
 
     // melee swing animation
@@ -6237,7 +6394,15 @@ function tick() {
         e.hp = 0; e.state = 'dying'; e.deadT = 3;      // retire it rather than stall
       }
     }
-    for (let i = enemies.length - 1; i >= 0; i--) if (enemies[i].gone) enemies.splice(i, 1);
+    for (let i = enemies.length - 1; i >= 0; i--) {
+      if (!enemies[i].gone) continue;
+      // Model-based enemies clone their materials on spawn so the hit flash is
+      // per-enemy. Those clones are theirs alone, so they go when they do —
+      // otherwise every kill leaks a set for the rest of the run.
+      const mats = enemies[i].mats;
+      if (mats) for (const m of mats) if (m && m.dispose) m.dispose();
+      enemies.splice(i, 1);
+    }
 
     // wave end
     if (game.state === 'wave' && game.spawnQueue === 0 && enemies.length === 0) endWave();
