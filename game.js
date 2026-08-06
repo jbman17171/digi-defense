@@ -2762,7 +2762,6 @@ const EYE = 1.62;
 const keys = {};
 addEventListener('keydown', e => {
   keys[e.code] = true;
-  if (alienQuiz) return;   // typing a name — let the input have every key
   if (e.code === 'Space') {
     e.preventDefault();
     if (player.grounded && game.state !== 'menu' && game.state !== 'gameover') {
@@ -2788,7 +2787,7 @@ document.addEventListener('pointerlockchange', () => {
   pointerLocked = document.pointerLockElement === canvas;
 });
 addEventListener('mousemove', e => {
-  if (!pointerLocked || alienQuiz) return;
+  if (!pointerLocked) return;
   player.yaw -= e.movementX * 0.0023;
   player.pitch -= e.movementY * 0.0023;
   player.pitch = Math.max(-1.45, Math.min(1.45, player.pitch));
@@ -2940,6 +2939,9 @@ let robotGltf = null;
 const enemies = [];
 // How many can be on their feet at once. The rest wait in the queue.
 const MAX_ALIVE = 6;
+// Boss height in metres. The hall walls are 3.05m and the rear doorway it
+// walks in through is 2.1m, so this has to stay under both.
+const FISH_HEIGHT = 1.9;
 
 loadModel('./models/RobotExpressive.glb', g => { robotGltf = g; });
 
@@ -3185,39 +3187,31 @@ function spawnSpongeEnemy() {
   return e;
 }
 
-// ---------- Rundas: the ice boss, in through the porch doors ----------
-// The model only ships an Idle clip, so the walk and the swing are driven here:
-// a heavy shoulder roll while it closes on you and a two-handed overhead slam
-// when it's in reach.
-let rundasGltf = null;
-loadModel('./models/rundas/scene.gltf', g => {
-  rundasGltf = g;
-  console.log('Rundas loaded —', g.animations.length, 'clips');
+// ---------- Fishie: the boss that comes in off the porch ----------
+// Unlike the other models this one ships a real clip set, so the run, the
+// smack and the slam are actual animation rather than hand-driven bobbing.
+let fishGltf = null;
+loadModel('./models/fishie/scene.gltf', g => {
+  fishGltf = g;
+  console.log('Fishie loaded —', g.animations.length, 'clips');
 });
 
-function rundasStride(e, dt, rate = 1) {
-  e.t += dt * rate;
-  const rig = e.rig;
-  if (!rig) return;
-  // lumbering weight shift rather than a walk cycle
-  rig.position.y = Math.abs(Math.sin(e.t * 3.2)) * 0.075;
-  rig.rotation.z = Math.sin(e.t * 3.2) * 0.07;
-  rig.rotation.x = Math.sin(e.t * 6.4) * 0.02;
+function fishPlay(e, key) {
+  if (!e.actions || e.cur === key) return;
+  const next = e.actions[key];
+  if (!next) return;
+  const prev = e.actions[e.cur];
+  next.reset();
+  next.enabled = true;
+  next.setEffectiveWeight(1);
+  if (prev && prev !== next) next.crossFadeFrom(prev, 0.18, false);
+  next.play();
+  e.cur = key;
 }
 
-function rundasSlam(e, dt) {
-  e.t += dt * 5.5;
-  const rig = e.rig;
-  if (!rig) return;
-  const k = (Math.sin(e.t) + 1) / 2;          // wind up, then drop
-  rig.rotation.x = -0.34 + k * 0.62;
-  rig.position.y = k * 0.12;
-  rig.rotation.z = 0;
-}
-
-function spawnRundasEnemy(doorDef) {
-  if (!rundasGltf) return spawnFaceEnemy(doorDef, 3, true);
-  const model = SkeletonUtils.clone(rundasGltf.scene);
+function spawnFishEnemy(doorDef) {
+  if (!fishGltf) return spawnFaceEnemy(doorDef, 3, true);
+  const model = SkeletonUtils.clone(fishGltf.scene);
   model.traverse(o => { if (o.isMesh) { o.castShadow = ENEMY_SHADOWS; o.frustumCulled = false; } });
 
   // measure the bind pose — setFromObject is unreliable on skinned meshes
@@ -3232,11 +3226,12 @@ function spawnRundasEnemy(doorDef) {
     }
   });
   const size = bind.getSize(new THREE.Vector3());
-  const sc = 2.35 / Math.max(size.y, 0.001);      // head and shoulders over you
+  // 1.9m: a head taller than you, and still clears the 2.1m rear doorway it
+  // walks in through and the 3.05m walls
+  const sc = FISH_HEIGHT / Math.max(size.y, 0.001);
   model.scale.setScalar(sc);
   model.position.y = -bind.min.y * sc;
 
-  // rig group so the stride can move the body without fighting the root
   const rig = new THREE.Group();
   rig.add(model);
   const root = new THREE.Group();
@@ -3245,37 +3240,45 @@ function spawnRundasEnemy(doorDef) {
   scene.add(root);
 
   const mixer = new THREE.AnimationMixer(model);
-  if (rundasGltf.animations.length) mixer.clipAction(rundasGltf.animations[0]).play();
+  const actions = {};
+  const pick = frag => fishGltf.animations.find(c => c.name.includes(frag));
+  const map = { Run: 'Run_g', Idle: 'Idle_g', Smack: 'Smack_g',
+                Slam: 'Jumping_Slam_g', Throw: 'Throw_g' };
+  for (const k in map) {
+    const clip = pick(map[k]);
+    if (clip) actions[k] = mixer.clipAction(clip);
+  }
 
-  const head = new THREE.Mesh(new THREE.PlaneGeometry(0.7, 0.7),
+  const head = new THREE.Mesh(new THREE.PlaneGeometry(0.55, 0.55),
     new THREE.MeshBasicMaterial({ visible: false }));
-  head.position.y = 2.0;
+  head.position.y = FISH_HEIGHT * 0.86;
   root.add(head);
 
   const mats = [];
   model.traverse(o => { if (o.isMesh && o.material) { o.material = o.material.clone(); mats.push(o.material); } });
 
-  // frost light so it reads as the ice boss even in a dark round
-  const aura = new THREE.PointLight(0x7fd8ff, 5, 7, 1.6);
-  aura.position.y = 1.5;
+  // so you can pick it out of a dark round
+  const aura = new THREE.PointLight(0x5fe0ff, 5, 7, 1.6);
+  aura.position.y = 1.2;
   root.add(aura);
 
   const e = {
-    kind: 'rundas', boss: true,
-    model: root, rig, head, mixer, mats, hitFlash: 0,
+    kind: 'fishie', boss: true,
+    model: root, rig, head, mixer, actions, mats, hitFlash: 0,
     tier: 3,
     hp: 22 + game.round * 2, maxHp: 22 + game.round * 2,   // tankier than the face boss
-    speed: 1.5 + game.round * 0.04,               // slow and inevitable
+    speed: 1.9 + game.round * 0.05,
     state: 'enter',
     doorZ: 0.15,
     attackCd: 0, stun: 0, deadT: 0, t: 0,
     cur: '',
     y: 0, vy: 0, grounded: true, jumpCd: 0,
   };
+  fishPlay(e, 'Run');
   enemies.push(e);
   rearTarget = 1;
   addShake(0.6);
-  showToast('!!! RUNDAS CAME IN OFF THE PORCH !!!', 3200);
+  showToast('!!! SOMETHING CAME IN OFF THE PORCH !!!', 3200);
   return e;
 }
 
@@ -3516,9 +3519,9 @@ function faceWaddle(e, dt, fast = 1) {
   e.rig.position.y = Math.abs(Math.sin(e.t)) * 0.07;
 }
 function enemyPlay(e, name, once = false) {
-  // patrick has his own clip names; rundas only ships an Idle and is animated
-  // by hand in rundasStride / rundasSlam
-  if (!e.actions || e.kind === 'patrick' || e.kind === 'rundas') return;
+  // patrick and fishie both ship their own clip names, driven by their own
+  // play helpers rather than the generic Idle/Running/Punch set
+  if (!e.actions || e.kind === 'patrick' || e.kind === 'fishie') return;
   if (e.cur === name) return;
   const prev = e.actions[e.cur];
   const next = e.actions[name];
@@ -3545,7 +3548,10 @@ function updateEnemy(e, dt) {
     e.deadT += dt;
     if (e.kind === 'face') e.rig.rotation.x = -Math.min(Math.PI / 2, e.deadT * 2.6);
     if (e.kind === 'patrick') patrickPlay(e, 'Fall');
-    if (e.kind === 'rundas') e.rig.rotation.x = -Math.min(Math.PI / 2.2, e.deadT * 1.5);
+    if (e.kind === 'fishie') {
+      fishPlay(e, 'Idle');
+      e.rig.rotation.x = -Math.min(Math.PI / 2.2, e.deadT * 1.5);
+    }
     if (e.kind === 'worm') {
       e.headGrp.rotation.z = Math.min(Math.PI / 2, e.deadT * 3);
       e.headGrp.position.y = Math.max(0.16, 0.42 - e.deadT * 0.5);
@@ -3605,12 +3611,13 @@ function updateEnemy(e, dt) {
     if (e.kind === 'face') faceWaddle(e, dt, 2.2);   // frantic arm flailing
     else if (e.kind === 'worm') wormCrawl(e, dt);    // rears up and lunges
     else if (e.kind === 'patrick') patrickPlay(e, 'LightCombo1');
-    else if (e.kind === 'rundas') rundasSlam(e, dt);
+    else if (e.kind === 'fishie') fishPlay(e, e.slam ? 'Slam' : 'Smack');
     e.attackCd -= dt;
     if (e.attackCd <= 0) {
       // slower swing than the rest, but it lands like a truck
-      e.attackCd = e.kind === 'rundas' ? 1.6 : 1.1;
-      damagePlayer(e.kind === 'rundas' ? 22 : 9 + e.tier * 3);
+      e.attackCd = e.kind === 'fishie' ? 1.5 : 1.1;
+      if (e.kind === 'fishie') e.slam = !e.slam;   // alternate slam and smack
+      damagePlayer(e.kind === 'fishie' ? 20 : 9 + e.tier * 3);
     }
     if (e.actions && e.actions.Punch && e.actions.Punch.paused) {
       e.cur = 'Idle'; enemyPlay(e, 'Punch', true);
@@ -3620,7 +3627,7 @@ function updateEnemy(e, dt) {
     if (e.kind === 'face') faceWaddle(e, dt);
     else if (e.kind === 'worm') wormCrawl(e, dt);
     else if (e.kind === 'patrick') patrickPlay(e, 'Run');
-    else if (e.kind === 'rundas') rundasStride(e, dt, e.speed * 1.6);
+    else if (e.kind === 'fishie') fishPlay(e, 'Run');
     dir.normalize();
     // face movement
     aimEnemy(e, Math.atan2(dir.x, dir.z) + (e.yawOffset || 0), dt);
@@ -5102,110 +5109,6 @@ function bearMaul() {
   damagePlayer(dmg);
 }
 
-// ============================================================
-// "NAME THAT ALIEN" — random dancing-alien quiz break
-// ============================================================
-let alienGltf = null, alienQuiz = null, alienCooldown = 40;
-loadModel('./models/alien/scene.gltf', g => {
-  alienGltf = g;
-  console.log('Alien loaded —', g.animations.length, 'clips');
-});
-
-const aqEl = document.getElementById('alienQuiz');
-const aqForm = document.getElementById('aqForm');
-const aqInput = document.getElementById('aqInput');
-const aqResult = document.getElementById('aqResult');
-
-function startAlienQuiz() {
-  if (!alienGltf || alienQuiz) return;
-  game.alienDone = true;          // one alien per run, that's it
-  const model = SkeletonUtils.clone(alienGltf.scene);
-  model.traverse(o => { if (o.isMesh) { o.castShadow = ENEMY_SHADOWS; o.frustumCulled = false; } });
-
-  // size it to ~1.9m using the bind-pose geometry (setFromObject lies on skinned meshes)
-  model.scale.setScalar(1);
-  model.position.set(0, 0, 0);
-  model.updateMatrixWorld(true);
-  const bind = new THREE.Box3();
-  model.traverse(o => {
-    if (o.isMesh) {
-      o.geometry.computeBoundingBox();
-      bind.union(o.geometry.boundingBox.clone().applyMatrix4(o.matrixWorld));
-    }
-  });
-  const size = bind.getSize(new THREE.Vector3());
-  const s = 1.9 / Math.max(size.y, 0.001);
-  model.scale.setScalar(s);
-  model.position.y = -bind.min.y * s;
-
-  // drop it right in front of the player, facing them
-  const fwd = new THREE.Vector3();
-  camera.getWorldDirection(fwd);
-  fwd.y = 0; fwd.normalize();
-  const holder = new THREE.Group();
-  holder.add(model);
-  holder.position.set(
-    Math.max(-5, Math.min(5, player.pos.x + fwd.x * 3.6)), 0,
-    Math.max(-8, Math.min(8, player.pos.z + fwd.z * 3.6)));
-  holder.rotation.y = Math.atan2(-fwd.x, -fwd.z);
-  scene.add(holder);
-
-  // theatrical spotlight so it pops
-  const spot = new THREE.PointLight(0x66ffe0, 14, 9, 1.5);
-  spot.position.set(holder.position.x, 2.6, holder.position.z);
-  scene.add(spot);
-
-  const mixer = new THREE.AnimationMixer(model);
-  if (alienGltf.animations.length) mixer.clipAction(alienGltf.animations[0]).play();
-
-  alienQuiz = { holder, mixer, spot, answered: false, t: 0 };
-  game.state = 'alien';
-  aqEl.style.display = 'flex';
-  aqResult.classList.remove('pop');
-  aqInput.value = '';
-  if (document.pointerLockElement) document.exitPointerLock();
-  setTimeout(() => aqInput.focus(), 60);
-}
-
-function finishAlienQuiz() {
-  if (!alienQuiz) return;
-  scene.remove(alienQuiz.holder);
-  scene.remove(alienQuiz.spot);
-  alienQuiz = null;
-  aqEl.style.display = 'none';
-  aqResult.classList.remove('pop');
-  game.state = 'wave';
-  canvas.requestPointerLock();
-}
-
-aqForm.addEventListener('submit', e => {
-  e.preventDefault();
-  if (!alienQuiz || alienQuiz.answered) return;
-  const name = aqInput.value.trim() || 'that guy';
-  alienQuiz.answered = true;
-  aqResult.textContent = 'Correct!';
-  aqResult.classList.add('pop');
-  aqForm.style.display = 'none';
-  game.score += 500;
-  showToast(`"${name}" — correct!  +500`, 3000);
-  setTimeout(() => { aqForm.style.display = 'flex'; finishAlienQuiz(); }, 1900);
-});
-
-function updateAlienQuiz(dt) {
-  if (!alienQuiz) return;
-  alienQuiz.t += dt;
-  alienQuiz.mixer.update(dt);
-  alienQuiz.holder.rotation.y += dt * 0.5;                       // slow turntable
-  alienQuiz.spot.intensity = 12 + Math.sin(alienQuiz.t * 4) * 4;
-  // keep the camera pointed at it
-  const h = alienQuiz.holder.position;
-  const want = Math.atan2(-(h.x - player.pos.x), -(h.z - player.pos.z));
-  let d = want - player.yaw;
-  while (d > Math.PI) d -= Math.PI * 2;
-  while (d < -Math.PI) d += Math.PI * 2;
-  player.yaw += d * Math.min(1, dt * 4);
-  player.pitch += (0.02 - player.pitch) * Math.min(1, dt * 4);
-}
 
 // ============================================================
 // GAME STATE / ROUNDS
@@ -5217,7 +5120,7 @@ const game = {
   interT: 0,
   charge: 1,
   mysteryUsed: false, upgraded: false, bossOut: false, portalUsed: false,
-  arsenalT: 0, alienDone: false, crateTimer: 18,
+  arsenalT: 0, crateTimer: 18,
   flashShots: 2, flashCd: 0,      // two frames per charge of the flash camera
   spongeOut: false, bridgeOut: false,
   lives: 0,          // 1-UP mushrooms banked
@@ -5232,8 +5135,8 @@ window.DEBUG = {
   grantMysteryReward, pickMysteryReward, MYSTERY_REWARDS,
   spawnDrop, clearDrops, updateDrops, getDrops: () => drops, useExtraLife, refreshLives, damagePlayer,
   spawnBear, getBear: () => bear, showRewardPopup, REWARD_INFO, spawnWormEnemy, spawnPatrickEnemy,
-  spawnRundasEnemy,
-  startAlienQuiz, isHeadshot, headSphere, camera, scene, THREE, spawnSpongeEnemy,
+  spawnFishEnemy,
+  isHeadshot, headSphere, camera, scene, THREE, spawnSpongeEnemy,
   getCrate: () => crate, damageCrate, updateEnemy, wormCrawl,
   startWave, endWave, MIRROR, revealMirror, refreshRoundBadge,
   WEATHER, setWeather, weatherForRound, strikeBolt, wx, updateWeather,
@@ -5460,7 +5363,6 @@ function pickTier() {
 let flashDecay = 0;
 addEventListener('mouseup', e => { if (e.button === 0) mouseHeld = false; });
 addEventListener('mousedown', e => {
-  if (alienQuiz) return;
   if (game.state === 'menu' || game.state === 'gameover') return;
   if (wheelOpen) return;
   if (!pointerLocked) { canvas.requestPointerLock(); return; }
@@ -6136,23 +6038,6 @@ function tick() {
     if (!d.broken && d.leaf.rotation.z) d.leaf.rotation.z *= Math.max(0, 1 - dt * 9);
   }
 
-  // the alien quiz pauses the fight but keeps the world rendering
-  if (alienQuiz) {
-    updateAlienQuiz(dt);
-    updatePlayerCamera();
-    composer.render();
-    return;
-  }
-
-  // the alien shows up once per run, then never again
-  if (game.state === 'wave' && !alienQuiz && alienGltf && !game.alienDone) {
-    alienCooldown -= dt;
-    if (alienCooldown <= 0) {
-      alienCooldown = rnd(70, 130);
-      startAlienQuiz();
-    }
-  }
-
   if (game.state !== 'menu' && game.state !== 'gameover') {
     updatePlayer(dt);
 
@@ -6203,9 +6088,9 @@ function tick() {
         // one boss can show up from round 3 on
         const wantBoss = game.round >= 3 && !game.bossOut && Math.random() < 0.3;
         if (wantBoss) {
-          // from round 5 the boss slot is usually Rundas; both come in through
+          // from round 5 the boss slot is usually Fishie; both come in through
           // the porch doors and both hold the one-boss-at-a-time flag
-          if (game.round >= 5 && rundasGltf && Math.random() < 0.6) spawnRundasEnemy(doorDef);
+          if (game.round >= 5 && fishGltf && Math.random() < 0.6) spawnFishEnemy(doorDef);
           else spawnFaceEnemy(doorDef, 3, true);
           game.bossOut = true;
         }

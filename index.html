@@ -282,39 +282,6 @@
                         opacity:.65; transform-origin:left; animation:rpDrain 1.6s linear forwards; }
   @keyframes rpDrain { from { transform:scaleX(1); } to { transform:scaleX(0); } }
 
-  /* ---------- "name that alien" quiz ---------- */
-  #alienQuiz { position:fixed; inset:0; z-index:68; display:none; flex-direction:column;
-               align-items:center; justify-content:space-between; padding:6vh 4vw 8vh;
-               background:radial-gradient(ellipse 70% 55% at 50% 50%, transparent 30%, rgba(3,6,10,.82) 100%); }
-  #alienQuiz .aqTitle {
-    font-family:var(--display); font-size:clamp(48px,9vw,120px); letter-spacing:.08em; line-height:1;
-    text-transform:uppercase; text-align:center;
-    background:linear-gradient(180deg,#eaffff 0%,#5cffd8 50%,#12a98a 100%);
-    -webkit-background-clip:text; background-clip:text; color:transparent;
-    filter:drop-shadow(0 0 28px rgba(92,255,216,.5)) drop-shadow(0 6px 20px rgba(0,0,0,.9));
-    animation:aqPulse 1.8s ease-in-out infinite;
-  }
-  @keyframes aqPulse { 50% { filter:drop-shadow(0 0 44px rgba(92,255,216,.8)) drop-shadow(0 6px 20px rgba(0,0,0,.9)); } }
-  #aqForm { display:flex; gap:12px; align-items:center; }
-  #aqInput {
-    font-family:var(--mono); font-size:22px; letter-spacing:.08em; color:#eafffb;
-    background:rgba(8,14,18,.9); border:1px solid #2ee0b8; border-radius:6px;
-    padding:14px 20px; width:min(420px,60vw); outline:none;
-    box-shadow:0 0 26px rgba(46,224,184,.28), inset 0 0 0 1px rgba(255,255,255,.04);
-  }
-  #aqInput::placeholder { color:#4d6f68; }
-  #aqBtn {
-    font-family:var(--display); font-size:22px; letter-spacing:.2em; cursor:pointer;
-    color:#04160f; background:linear-gradient(180deg,#7dffd8,#18c79c);
-    border:none; border-radius:6px; padding:15px 30px 12px;
-    box-shadow:0 0 26px rgba(46,224,184,.4);
-  }
-  #aqResult { position:absolute; top:44%; left:50%; transform:translate(-50%,-50%) scale(.7);
-              font-family:var(--display); font-size:clamp(60px,12vw,150px); letter-spacing:.1em;
-              color:#7CFC00; text-shadow:0 0 50px rgba(124,252,0,.75), 0 6px 24px #000;
-              opacity:0; pointer-events:none; }
-  #aqResult.pop { animation:aqCorrect .55s cubic-bezier(.2,1.4,.4,1) forwards; }
-  @keyframes aqCorrect { to { opacity:1; transform:translate(-50%,-50%) scale(1); } }
 </style>
 </head>
 <body>
@@ -365,15 +332,6 @@
   <div id="wheelLabel"></div>
 </div>
 
-<div id="alienQuiz">
-  <div class="aqTitle">Name That Alien</div>
-  <form id="aqForm" autocomplete="off">
-    <input id="aqInput" placeholder="type a name…" maxlength="24" autocomplete="off" spellcheck="false">
-    <button id="aqBtn" type="submit">Submit</button>
-  </form>
-  <div id="aqResult">Correct!</div>
-</div>
-
 <div id="rewardPop">
   <div class="rpIcon" id="rpIcon">?</div>
   <div class="rpText">
@@ -416,9 +374,8 @@
     "Sponge Neighbor - Rigged" by AndruBanana (CC-BY-4.0) &middot;
     "Animated Realistic Bear" by AnimalMesh 3D (CC-BY-4.0) &middot;
     "area 9 golf cart" by maxdragonn (CC-BY-4.0) &middot;
-    "Dancing Alien" by nthmn.exe (CC-BY-NC-SA-4.0) &middot;
     "SanDisk SD Card" by Kiran Kumar (CC-BY-4.0) &middot;
-    "Creatures&gt;Bosses&gt;Rundas 2" by jameslucino117 (CC-BY-4.0)</div>
+    "Fishie | VGDC" by MooKorea (CC-BY-4.0)</div>
 </div>
 
 <div id="perfStats"></div>

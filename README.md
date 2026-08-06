@@ -53,7 +53,7 @@ count. `window.digiPerf` in the console has the same numbers plus
 
 - **Waves of enemies** that pour in through the garage doors, plus a boss, a
   wandering bear, a caterpillar that sheds a segment per hit, and a SpongeBob.
-  From round 5, Rundas comes up the porch steps and in through the back doors.
+  From round 5, a boss comes up the porch steps and in through the back doors.
 - **Mystery boxes** drop in mid-round. Flash or smash one open and the prize
   pops out Smash-Bros style — walk over it to use it, or leave it alone.
   Rewards include a laser camcorder, an exposure bomb, a shield potion, and a
@@ -95,6 +95,5 @@ under [CC0](https://creativecommons.org/publicdomain/zero/1.0/). See
 - "Sponge Neighbor - Rigged" by AndruBanana (CC-BY-4.0)
 - "Animated Realistic Bear" by AnimalMesh 3D (CC-BY-4.0)
 - "area 9 golf cart" by maxdragonn (CC-BY-4.0)
-- "Dancing Alien" by nthmn.exe (CC-BY-NC-SA-4.0)
 - "SanDisk SD Card" by Kiran Kumar (CC-BY-4.0)
-- "Creatures>Bosses>Rundas 2" by jameslucino117 (CC-BY-4.0)
+- "Fishie | VGDC" by MooKorea (CC-BY-4.0)
